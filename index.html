@@ -1890,17 +1890,61 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+// DBF exige nombres de campo válidos (sin espacios/tildes/símbolos, máx. 10
+// caracteres, sin arrancar con número) — ArcGIS rechaza el archivo completo
+// si una etiqueta del KML no cumple esto. Se sanea cada nombre y se
+// desduplican los que colisionan al truncar a 10 caracteres.
+function sanitizeFieldName(name, used) {
+  let clean = String(name)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '') // quita tildes (á→a, ñ→n, etc.)
+    .replace(/[^A-Za-z0-9_]/g, '_')
+    .replace(/^[^A-Za-z]+/, '');
+  clean = clean.slice(0, 10);
+  if (!clean) clean = 'FIELD';
+  let finalName = clean;
+  let n = 1;
+  while (used.has(finalName.toUpperCase())) {
+    const suffix = String(n++);
+    finalName = clean.slice(0, 10 - suffix.length) + suffix;
+  }
+  used.add(finalName.toUpperCase());
+  return finalName;
+}
+
+function sanitizeFeaturesForShapefile(features) {
+  const mapping = {};
+  const used = new Set();
+  features.forEach(f => {
+    Object.keys(f.properties || {}).forEach(key => {
+      if (!(key in mapping)) mapping[key] = sanitizeFieldName(key, used);
+    });
+  });
+  return features.map(f => {
+    const newProps = {};
+    Object.entries(f.properties || {}).forEach(([k, v]) => { newProps[mapping[k]] = v; });
+    return { type: f.type, properties: newProps, geometry: f.geometry };
+  });
+}
+
 // shp-write escribe los textos en Windows-1252 (single-byte, así entran bien
-// tildes/ñ) pero no genera el .cpg que declara esa codificación — sin él,
-// QGIS/ArcGIS y hasta nuestro propio lector (shpjs) asumen UTF-8 por defecto
-// y corrompen los acentos (ej. "Región" → "Regi�n"). Se agrega el .cpg
-// correspondiente a cada shapefile (point/line/polygon) antes de descargar.
-async function addCpgToShapefileZip(blob) {
+// tildes/ñ) pero no declara esa codificación en ningún lado del archivo:
+// - Se agrega el .cpg "windows-1252" (lo usan QGIS/GDAL).
+// - Se fija el byte "Language Driver ID" (offset 29 del header DBF) en 0x57
+//   (ANSI), que es el mecanismo NATIVO de Esri para esto — sin ninguno de
+//   los dos, cada lector asume una codificación distinta y corrompe los
+//   acentos (ej. "Región" → "Regi�n"), y algunas versiones de ArcGIS
+//   directamente se niegan a abrir el archivo.
+async function fixShapefileZipForArcgis(blob) {
   const zip = await JSZip.loadAsync(blob);
   const bases = new Set();
-  Object.keys(zip.files).forEach(name => {
+  for (const name of Object.keys(zip.files)) {
     if (/\.shp$/i.test(name)) bases.add(name.replace(/\.shp$/i, ''));
-  });
+    if (/\.dbf$/i.test(name)) {
+      const buf = await zip.files[name].async('arraybuffer');
+      new DataView(buf).setUint8(29, 0x57);
+      zip.file(name, buf);
+    }
+  }
   bases.forEach(base => zip.file(base + '.cpg', 'windows-1252'));
   return zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
 }
@@ -1920,11 +1964,12 @@ async function convertKmlFileToShapefile(file) {
   }
 
   const geojson = kmlToGeoJSON(kmlText);
-  const flat = { type: 'FeatureCollection', features: flattenForShapefile(geojson.features) };
+  const flattened = flattenForShapefile(geojson.features);
+  const flat = { type: 'FeatureCollection', features: sanitizeFeaturesForShapefile(flattened) };
   if (!flat.features.length) throw new Error(`"${file.name}" no tiene geometrías reconocibles`);
 
   const rawBlob = await shpwrite.zip(flat, { outputType: 'blob', compression: 'DEFLATE' });
-  const blob = await addCpgToShapefileZip(rawBlob);
+  const blob = await fixShapefileZipForArcgis(rawBlob);
   const baseName = file.name.replace(/\.(kmz|kml)$/i, '');
   downloadBlob(blob, `${baseName}_shapefile.zip`);
 }
