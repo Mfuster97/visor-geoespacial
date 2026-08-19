@@ -1,0 +1,16 @@
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+
+# Archivos generados por el visor
+visor_kmz_*.html
+visor_de_proyectos_*.html
+
+# Datos geoespaciales de prueba
+*.kmz
+*.shp
+*.dbf
+*.shx
+*.prj
+*.gdb/
