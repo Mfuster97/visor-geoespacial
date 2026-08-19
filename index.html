@@ -309,6 +309,29 @@
     flex-shrink: 0;
   }
   .layer-row .lremove:hover { color: var(--danger); }
+  .layer-row .lstyle {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    padding: 2px 4px;
+    flex-shrink: 0;
+  }
+  .layer-row .lstyle:hover { color: var(--text); }
+
+  /* Simbología personalizada por capa */
+  .style-color-input {
+    width: 100%;
+    height: 34px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-2);
+    cursor: pointer;
+  }
+  .style-range-input { width: 100%; accent-color: var(--accent); cursor: pointer; }
 
   .layout {
     flex: 1;
@@ -877,6 +900,30 @@
     <input type="text" id="wfsLayerInput" class="modal-text-input" value="SNASPE:snap" />
     <button id="wfsRunBtn" class="modal-primary-btn" style="margin-top:14px;">Cargar capa</button>
     <div id="wfsStatus" class="modal-status"></div>
+  </div>
+</div>
+
+<div id="styleModal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2>🎨 Simbología de capa</h2>
+      <button id="styleModalClose" class="modal-close" aria-label="Cerrar">×</button>
+    </div>
+    <p class="modal-hint" id="styleModalLayerName"></p>
+
+    <label class="modal-field-label" for="styleFillColor">Color de relleno</label>
+    <input type="color" id="styleFillColor" class="style-color-input" />
+
+    <label class="modal-field-label" for="styleBorderColor">Color de borde</label>
+    <input type="color" id="styleBorderColor" class="style-color-input" />
+
+    <label class="modal-field-label" for="styleWeight">Grosor de borde: <span id="styleWeightValue">3</span>px</label>
+    <input type="range" id="styleWeight" class="style-range-input" min="1" max="10" step="1" />
+
+    <label class="modal-field-label" for="styleOpacity">Opacidad de relleno: <span id="styleOpacityValue">30</span>%</label>
+    <input type="range" id="styleOpacity" class="style-range-input" min="0" max="1" step="0.05" />
+
+    <button id="styleResetBtn" class="secondary" style="margin-top:14px; width:100%;">Restablecer color base</button>
   </div>
 </div>
 
@@ -2994,6 +3041,25 @@ document.getElementById('wfsRunBtn').addEventListener('click', async () => {
   }
 });
 
+document.getElementById('styleModalClose').addEventListener('click', () => {
+  document.getElementById('styleModal').classList.remove('open');
+});
+document.getElementById('styleModal').addEventListener('click', (e) => {
+  if (e.target.id === 'styleModal') document.getElementById('styleModal').classList.remove('open');
+});
+['styleFillColor', 'styleBorderColor', 'styleWeight', 'styleOpacity'].forEach(id => {
+  document.getElementById(id).addEventListener('input', applyStyleFromModal);
+});
+document.getElementById('styleResetBtn').addEventListener('click', () => {
+  const file = loadedFiles.find(f => f.id === styleModalFileId);
+  if (!file) return;
+  document.getElementById('styleFillColor').value = file.color;
+  document.getElementById('styleBorderColor').value = file.color;
+  document.getElementById('styleWeight').value = 3;
+  document.getElementById('styleOpacity').value = 0.3;
+  applyStyleFromModal();
+});
+
 // Reconstruye una capa a partir de los datos guardados en un visor exportado,
 // preservando color/tipo/visibilidad originales (no se re-asignan).
 function restoreLayer(def) {
@@ -3014,6 +3080,12 @@ function restoreLayer(def) {
     file.kmlText = def.kml;
     parseKml(def.kml, file.id, file.color);
   }
+  // Simbología personalizada guardada por "Guardar y compartir" (ver
+  // exportViewer): se reaplica recién ahora que los items ya existen.
+  if (def.style) {
+    file.style = def.style;
+    applyFileStyle(file);
+  }
 }
 
 function exportViewer() {
@@ -3026,9 +3098,9 @@ function exportViewer() {
       return { name: f.name, type: f.type, color: f.color, visible: f.visible, format: 'wms', wmsUrl: f.wmsUrl, wmsLayerName: f.wmsLayerName };
     }
     if (f.sourceGeoJSON) {
-      return { name: f.name, type: f.type, color: f.color, visible: f.visible, format: 'geojson', geo: f.sourceGeoJSON };
+      return { name: f.name, type: f.type, color: f.color, visible: f.visible, format: 'geojson', geo: f.sourceGeoJSON, style: f.style || null };
     }
-    return { name: f.name, type: f.type, color: f.color, visible: f.visible, format: 'kml', kml: f.kmlText || '' };
+    return { name: f.name, type: f.type, color: f.color, visible: f.visible, format: 'kml', kml: f.kmlText || '', style: f.style || null };
   });
 
   // Escapamos la barra del cierre de <script> para que el navegador no corte
@@ -3110,6 +3182,74 @@ async function handleFiles(fileList) {
     }
   } finally {
     showLoading(false);
+  }
+}
+
+// ---- Simbología personalizada por capa ---------------------------------
+// file.style = { fillColor, color, weight, opacity } | undefined ("undefined"
+// = coloreado automático de siempre: file.color, o por estado en capas SEA).
+// Se aplica con setStyle() sobre los Leaflet layers ya creados en vez de
+// enhebrar el override por todo parseKml/geometryToLayer/addGeoJsonFeatures:
+// un solo punto de verdad más simple, y funciona igual sin importar de qué
+// formato vino la capa (KML/KMZ/SHP/GeoJSON/WFS).
+
+// setStyle() no existe en L.LayerGroup (usado para MultiPolygon/MultiLineString/
+// MultiPoint/GeometryCollection en geometryToLayer y en el MultiGeometry de KML)
+// — solo en los Path (Polygon/Polyline/CircleMarker). Se recorre recursivamente
+// para cubrir grupos anidados (p.ej. una GeometryCollection con sub-colecciones).
+function applyLeafletStyle(layer, style) {
+  if (typeof layer.setStyle === 'function') layer.setStyle(style);
+  if (typeof layer.eachLayer === 'function') layer.eachLayer(sub => applyLeafletStyle(sub, style));
+}
+
+function applyFileStyle(file) {
+  if (!file.style) return;
+  const s = file.style;
+  const leafletStyle = { color: s.color, fillColor: s.fillColor, weight: s.weight, fillOpacity: s.opacity };
+  allItems.filter(i => i.fileId === file.id).forEach(item => applyLeafletStyle(item.layer, leafletStyle));
+}
+
+let styleModalFileId = null;
+
+function openStyleModal(fileId) {
+  const file = loadedFiles.find(f => f.id === fileId);
+  if (!file) return;
+  styleModalFileId = fileId;
+
+  const s = file.style || { fillColor: file.color, color: file.color, weight: 3, opacity: 0.3 };
+  document.getElementById('styleModalLayerName').textContent = `Editando: ${file.name}`;
+  document.getElementById('styleFillColor').value = s.fillColor;
+  document.getElementById('styleBorderColor').value = s.color;
+  document.getElementById('styleWeight').value = s.weight;
+  document.getElementById('styleWeightValue').textContent = s.weight;
+  document.getElementById('styleOpacity').value = s.opacity;
+  document.getElementById('styleOpacityValue').textContent = Math.round(s.opacity * 100);
+
+  document.getElementById('styleModal').classList.add('open');
+}
+
+// Lee los 4 controles del modal, los guarda en file.style y los aplica en el
+// acto — se llama en cada evento "input" (arrastrar un slider ya actualiza
+// el mapa), no hace falta un botón "Aplicar" aparte.
+function applyStyleFromModal() {
+  const file = loadedFiles.find(f => f.id === styleModalFileId);
+  if (!file) return;
+
+  const fillColor = document.getElementById('styleFillColor').value;
+  const color = document.getElementById('styleBorderColor').value;
+  const weight = Number(document.getElementById('styleWeight').value);
+  const opacity = Number(document.getElementById('styleOpacity').value);
+
+  document.getElementById('styleWeightValue').textContent = weight;
+  document.getElementById('styleOpacityValue').textContent = Math.round(opacity * 100);
+
+  file.style = { fillColor, color, weight, opacity };
+  applyFileStyle(file);
+
+  const swatch = document.querySelector(`.layer-row[data-file-id="${file.id}"] .swatch`);
+  if (swatch) {
+    swatch.style.background = fillColor;
+    swatch.title = 'Color de capa (personalizado)';
   }
 }
 
@@ -3209,16 +3349,22 @@ function buildLayerRow(file) {
   }
   const fileItems = allItems.filter(i => i.fileId === file.id);
   const hasEstado = fileItems.some(i => i.estado);
-  const swatchStyle = hasEstado
-    ? `background:conic-gradient(${STATUS_BUCKETS.map((b, idx) => `${b.color} ${idx * 90}deg ${(idx + 1) * 90}deg`).join(',')});`
-    : `background:${file.color};`;
+  // La simbología personalizada (file.style) pisa tanto el color plano como
+  // el gradiente por estado — es una elección explícita del usuario.
+  const swatchStyle = file.style
+    ? `background:${file.style.fillColor};`
+    : hasEstado
+      ? `background:conic-gradient(${STATUS_BUCKETS.map((b, idx) => `${b.color} ${idx * 90}deg ${(idx + 1) * 90}deg`).join(',')});`
+      : `background:${file.color};`;
+  const swatchTitle = file.style ? 'Color de capa (personalizado)' : (hasEstado ? 'Colores por estado del proyecto' : 'Color de capa');
   return `
     <div class="layer-row" data-file-id="${file.id}">
       <input type="checkbox" class="lvis" ${file.visible ? 'checked' : ''} />
-      <span class="swatch" style="${swatchStyle}" title="${hasEstado ? 'Colores por estado del proyecto' : 'Color de capa'}"></span>
+      <span class="swatch" style="${swatchStyle}" title="${swatchTitle}"></span>
       <span class="lname" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
       <button class="ltype ltype-${file.type}" title="Clic para cambiar de grupo">${file.type === 'sea' ? 'SEA' : 'Propio'}</button>
       <span class="lcount">${fileItems.length}</span>
+      <button class="lstyle" title="Editar simbología (color, borde, opacidad)">🎨</button>
       <button class="lremove" title="Quitar capa">×</button>
     </div>
   `;
@@ -3259,6 +3405,7 @@ function renderLayersPanel() {
       row.querySelector('.ltype').addEventListener('click', () => {
         setFileType(fileId, file.type === 'sea' ? 'propio' : 'sea');
       });
+      row.querySelector('.lstyle').addEventListener('click', () => openStyleModal(fileId));
     }
   });
 }
