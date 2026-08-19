@@ -1967,6 +1967,54 @@ async function fetchWmsCapabilities(baseUrl) {
   return parseWmsCapabilities(xmlText);
 }
 
+// Capas devueltas por el último "Buscar capas" exitoso — vive en memoria
+// para que filtrar la lista no dispare un nuevo fetch (ver renderWmsLayerList).
+let wmsDiscoveredLayers = [];
+
+// Pinta en #wmsLayerList las capas de "layers" que coincidan con filterText
+// (substring case-insensitive sobre name/title/abstract). No vuelve a pedir
+// datos al servidor — solo filtra el array ya obtenido por fetchWmsCapabilities.
+// Todo el texto proveniente del servicio WMS pasa por escapeHtml() antes de
+// insertarse, nunca se vuelca crudo con innerHTML (name/title/abstract son
+// datos de un servidor externo, no confiables).
+function renderWmsLayerList(layers, filterText) {
+  const listEl = document.getElementById('wmsLayerList');
+  const norm = (filterText || '').trim().toLowerCase();
+  const filtered = norm
+    ? layers.filter(layer => {
+        const haystack = `${layer.name || ''} ${layer.title || ''} ${layer.abstract || ''}`.toLowerCase();
+        return haystack.includes(norm);
+      })
+    : layers;
+
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="wms-layer-empty">${layers.length ? 'Ninguna capa coincide con el filtro.' : 'El servicio no tiene capas con nombre disponibles.'}</div>`;
+    return;
+  }
+
+  const LIMIT = 200;
+  const visible = filtered.slice(0, LIMIT);
+
+  const rows = visible.map(layer => {
+    const abstractHtml = layer.abstract
+      ? `<div class="wms-layer-item-abstract" title="${escapeHtml(layer.abstract)}">${escapeHtml(layer.abstract)}</div>`
+      : '';
+    return `
+      <div class="wms-layer-item">
+        <div class="wms-layer-item-title">${escapeHtml(layer.title || layer.name)}</div>
+        <div class="wms-layer-item-name">${escapeHtml(layer.name)}</div>
+        ${abstractHtml}
+      </div>
+    `;
+  }).join('');
+
+  const truncatedNote = filtered.length > LIMIT
+    ? `<div class="wms-layer-empty">Mostrando ${LIMIT} de ${filtered.length} — refiná el filtro para ver más.</div>`
+    : '';
+
+  listEl.innerHTML = rows + truncatedNote;
+}
+
 async function addKmzFile(arrayBuffer, filename) {
   const zip = await JSZip.loadAsync(arrayBuffer);
   let kmlFile = null;
@@ -2384,15 +2432,67 @@ document.getElementById('convertRunBtn').addEventListener('click', async () => {
   }
 });
 
+// Limpia el resultado de "Buscar capas" (lista, filtro, estado) — se usa al
+// abrir o cerrar el modal para que no quede una búsqueda vieja visible.
+function resetWmsDiscovery() {
+  wmsDiscoveredLayers = [];
+  document.getElementById('wmsDiscoverStatus').textContent = '';
+  document.getElementById('wmsLayerFilterInput').value = '';
+  document.getElementById('wmsLayerFilterWrap').hidden = true;
+  document.getElementById('wmsLayerList').innerHTML = '';
+}
+
 document.getElementById('wmsbtn').addEventListener('click', () => {
   document.getElementById('wmsModal').classList.add('open');
   document.getElementById('wmsStatus').textContent = '';
+  resetWmsDiscovery();
 });
 document.getElementById('wmsModalClose').addEventListener('click', () => {
   document.getElementById('wmsModal').classList.remove('open');
 });
 document.getElementById('wmsModal').addEventListener('click', (e) => {
   if (e.target.id === 'wmsModal') document.getElementById('wmsModal').classList.remove('open');
+});
+document.getElementById('wmsDiscoverBtn').addEventListener('click', async () => {
+  const url = document.getElementById('wmsUrlInput').value.trim();
+  const status = document.getElementById('wmsDiscoverStatus');
+  const filterWrap = document.getElementById('wmsLayerFilterWrap');
+  const filterInput = document.getElementById('wmsLayerFilterInput');
+  const discoverBtn = document.getElementById('wmsDiscoverBtn');
+
+  if (!url) {
+    status.textContent = 'Ingresá la URL del servicio WMS.';
+    return;
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    status.textContent = 'La URL debe empezar con http:// o https://';
+    return;
+  }
+
+  discoverBtn.disabled = true;
+  filterWrap.hidden = true;
+  filterInput.value = '';
+  wmsDiscoveredLayers = [];
+  status.textContent = 'Buscando...';
+
+  try {
+    const result = await fetchWmsCapabilities(url);
+    wmsDiscoveredLayers = result.layers;
+    if (wmsDiscoveredLayers.length) {
+      status.textContent = `${wmsDiscoveredLayers.length} capa${wmsDiscoveredLayers.length === 1 ? '' : 's'} encontrada${wmsDiscoveredLayers.length === 1 ? '' : 's'} (WMS ${result.version}).`;
+      filterWrap.hidden = false;
+      renderWmsLayerList(wmsDiscoveredLayers, '');
+    } else {
+      status.textContent = 'El servicio respondió pero no tiene capas con nombre disponibles.';
+    }
+  } catch (e) {
+    status.textContent = `❌ ${e.message}`;
+  } finally {
+    discoverBtn.disabled = false;
+  }
+});
+document.getElementById('wmsLayerFilterInput').addEventListener('input', (e) => {
+  renderWmsLayerList(wmsDiscoveredLayers, e.target.value);
 });
 document.getElementById('wmsRunBtn').addEventListener('click', () => {
   const name = document.getElementById('wmsNameInput').value;
