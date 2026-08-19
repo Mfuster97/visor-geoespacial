@@ -652,8 +652,10 @@
   }
   .modal-text-input:focus { border-color: var(--accent); }
 
-  /* Descubrimiento de capas WMS vía GetCapabilities (Etapa 1.2) */
-  #wmsModal .modal-box { width: min(520px, 100%); }
+  /* Descubrimiento de capas WMS/WFS vía GetCapabilities — las clases .wms-*
+     son intencionalmente genéricas y se reutilizan tal cual para el modal
+     WFS (misma lista con filtro), en vez de duplicar CSS por protocolo. */
+  #wmsModal .modal-box, #wfsModal .modal-box { width: min(520px, 100%); }
   .wms-url-row { display: flex; gap: 8px; align-items: stretch; }
   .wms-url-row .modal-text-input { flex: 1; min-width: 0; }
   .wms-discover-btn { white-space: nowrap; padding: 0 12px; font-size: 12.5px; }
@@ -789,6 +791,7 @@
   <button id="exportbtn" class="secondary">💾 Guardar y compartir</button>
   <button id="convertbtn" class="secondary">🔄 Convertir SHP⇄KMZ</button>
   <button id="wmsbtn" class="secondary">🛰️ + Capa WMS</button>
+  <button id="wfsbtn" class="secondary">🧩 + Capa WFS</button>
   <button id="filebtn">Agregar capa</button>
   <input type="file" id="fileinput" accept=".kmz,.kml,.zip,.shp,.dbf,.shx,.prj,.geojson,.json" multiple />
 </header>
@@ -839,6 +842,39 @@
     <input type="text" id="wmsLayerInput" class="modal-text-input" value="SNASPE:snap" />
     <button id="wmsRunBtn" class="modal-primary-btn" style="margin-top:14px;">Agregar capa</button>
     <div id="wmsStatus" class="modal-status"></div>
+  </div>
+</div>
+
+<div id="wfsModal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2>🧩 Agregar capa WFS</h2>
+      <button id="wfsModalClose" class="modal-close" aria-label="Cerrar">×</button>
+    </div>
+    <p class="modal-hint">
+      Descargá los elementos (vectores) de un servicio WFS (OGC) y agregalos como una
+      capa local más — quedan disponibles en el buscador, el árbol y los gráficos,
+      igual que un KML o GeoJSON cargado a mano. Solo se descarga lo que ves en el
+      mapa: navegá/alejá el zoom antes de cargar para cubrir otra zona.
+    </p>
+    <label class="modal-field-label" for="wfsNameInput">Nombre de la capa</label>
+    <input type="text" id="wfsNameInput" class="modal-text-input" value="SNAP (WFS)" />
+    <label class="modal-field-label" for="wfsUrlInput">URL del servicio WFS</label>
+    <div class="wms-url-row">
+      <input type="text" id="wfsUrlInput" class="modal-text-input" value="https://geoportal.cl/geoserver/SNASPE/wfs" />
+      <button id="wfsDiscoverBtn" type="button" class="secondary wms-discover-btn">🔎 Buscar capas</button>
+    </div>
+    <div id="wfsDiscoverStatus" class="modal-status"></div>
+
+    <div id="wfsLayerFilterWrap" class="wms-layer-filter-wrap" hidden>
+      <input type="text" id="wfsLayerFilterInput" class="modal-text-input" placeholder="Filtrar capas…" />
+      <div id="wfsLayerList" class="wms-layer-list"></div>
+    </div>
+
+    <label class="modal-field-label" for="wfsLayerInput">Nombre de la capa WFS</label>
+    <input type="text" id="wfsLayerInput" class="modal-text-input" value="SNASPE:snap" />
+    <button id="wfsRunBtn" class="modal-primary-btn" style="margin-top:14px;">Cargar capa</button>
+    <div id="wfsStatus" class="modal-status"></div>
   </div>
 </div>
 
@@ -1804,10 +1840,11 @@ function addWmsLayer(name, url, wmsLayerName, opts) {
 // Sirven para construir la URL de GetCapabilities y para parsear la
 // respuesta XML en una lista plana de capas solicitables.
 
-// Agrega service=WMS&request=GetCapabilities a la URL ingresada por el
+// Agrega service=<WMS|WFS>&request=GetCapabilities a la URL ingresada por el
 // usuario sin pisar query params que ya pudiera traer (p.ej. ?version=1.1.1
-// o credenciales en la query) y sin duplicar el "?".
-function buildGetCapabilitiesUrl(baseUrl) {
+// o credenciales en la query) y sin duplicar el "?". Compartida entre el
+// descubrimiento de capas WMS y WFS — misma URL, distinto "service".
+function buildGetCapabilitiesUrl(baseUrl, service) {
   const url = new URL(baseUrl);
   const hasParam = (name) => {
     for (const key of url.searchParams.keys()) {
@@ -1815,7 +1852,7 @@ function buildGetCapabilitiesUrl(baseUrl) {
     }
     return false;
   };
-  if (!hasParam('service')) url.searchParams.set('service', 'WMS');
+  if (!hasParam('service')) url.searchParams.set('service', service || 'WMS');
   if (!hasParam('request')) url.searchParams.set('request', 'GetCapabilities');
   return url.toString();
 }
@@ -2049,6 +2086,263 @@ function selectWmsLayer(layer) {
   document.getElementById('wmsNameInput').value = layer.title || layer.name;
   document.getElementById('wmsLayerInput').value = layer.name;
   renderWmsLayerList(wmsDiscoveredLayers, document.getElementById('wmsLayerFilterInput').value);
+}
+
+// ---- WFS: descubrimiento (GetCapabilities) y descarga (GetFeature) ------
+// A diferencia de WMS (que solo pinta tiles), un WFS entrega geometrías —
+// se descargan como GeoJSON y se agregan con addGeoJsonFile(), el mismo
+// pipeline que ya usan los archivos .geojson cargados a mano: sin sistema
+// paralelo, la capa queda como cualquier otra vectorial (kind:'vector',
+// con entradas propias en allItems, buscable/filtrable/exportable igual).
+
+// Cuántos features se piden como máximo por capa — evita que un dataset
+// grande (miles de polígonos detallados) cuelgue el navegador al renderizar.
+const WFS_FEATURE_LIMIT = 2000;
+
+// Busca el primer elemento con ese localName sin importar su prefijo de
+// namespace (WFS usa profusamente ows:/fes:, a diferencia de los <Layer>
+// sin prefijo de WMS) — más simple y robusto que escapar ":" en selectores CSS.
+function findByLocalName(root, localName) {
+  const all = root.getElementsByTagName('*');
+  for (let i = 0; i < all.length; i++) {
+    if (all[i].localName === localName) return all[i];
+  }
+  return null;
+}
+
+// Extrae Name/Title/Abstract/BoundingBox geográfico de un <FeatureType>.
+// A diferencia de WMS, WFS no anida capas (FeatureTypeList es siempre
+// plana) y el Name viene calificado con el workspace (ej. "SNASPE:snap").
+function extractFeatureTypeInfo(featureTypeEl, version) {
+  const getChildText = (tag) => {
+    const el = featureTypeEl.querySelector(':scope > ' + tag);
+    return el ? el.textContent.trim() : '';
+  };
+
+  const name = getChildText('Name') || null;
+  const title = getChildText('Title');
+  const abstractText = getChildText('Abstract');
+
+  let bbox = null;
+  // WFS 1.1.0/2.0.0: <ows:WGS84BoundingBox><ows:LowerCorner>lon lat</ows:LowerCorner>...
+  const wgsBboxEl = findByLocalName(featureTypeEl, 'WGS84BoundingBox');
+  if (wgsBboxEl) {
+    const lowerEl = findByLocalName(wgsBboxEl, 'LowerCorner');
+    const upperEl = findByLocalName(wgsBboxEl, 'UpperCorner');
+    if (lowerEl && upperEl) {
+      const [west, south] = lowerEl.textContent.trim().split(/\s+/).map(Number);
+      const [east, north] = upperEl.textContent.trim().split(/\s+/).map(Number);
+      if ([west, south, east, north].every(Number.isFinite)) {
+        bbox = { west, south, east, north };
+      }
+    }
+  }
+  // WFS 1.0.0: <LatLongBoundingBox minx miny maxx maxy> (sin prefijo, como WMS 1.1.1).
+  if (!bbox) {
+    const latLongEl = featureTypeEl.querySelector(':scope > LatLongBoundingBox');
+    if (latLongEl) {
+      const west = parseFloat(latLongEl.getAttribute('minx'));
+      const south = parseFloat(latLongEl.getAttribute('miny'));
+      const east = parseFloat(latLongEl.getAttribute('maxx'));
+      const north = parseFloat(latLongEl.getAttribute('maxy'));
+      if ([west, south, east, north].every(Number.isFinite)) {
+        bbox = { west, south, east, north };
+      }
+    }
+  }
+
+  return { name, title: title || name || '', abstract: abstractText, bbox, version };
+}
+
+// Parsea el XML de GetCapabilities de WFS (1.0.0/1.1.0/2.0.0) y devuelve
+// { version, layers }. Mismo patrón de validación que parseWmsCapabilities:
+// <parsererror> ante XML inválido, <ows:Exception>/<ServiceException> ante
+// un error reportado por el propio servicio.
+function parseWfsCapabilities(xmlText) {
+  const parser = new DOMParser();
+  const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+
+  if (xmlDoc.querySelector('parsererror')) {
+    throw new Error('El servidor no devolvió un XML válido de GetCapabilities.');
+  }
+
+  const exceptionTextEl = findByLocalName(xmlDoc, 'ExceptionText');
+  const serviceExceptionEl = xmlDoc.querySelector('ServiceException');
+  const exceptionEl = exceptionTextEl || serviceExceptionEl;
+  if (exceptionEl) {
+    const msg = exceptionEl.textContent.trim();
+    throw new Error(msg ? `El servicio WFS devolvió un error: ${msg}` : 'El servicio WFS devolvió un error.');
+  }
+
+  const root = xmlDoc.documentElement;
+  if (!root || !/Capabilities$/i.test(root.localName)) {
+    throw new Error('La respuesta no parece ser un GetCapabilities de WFS.');
+  }
+
+  const version = root.getAttribute('version') || '2.0.0';
+
+  const featureTypeEls = xmlDoc.querySelectorAll('FeatureTypeList > FeatureType');
+  const layers = Array.from(featureTypeEls).map(el => extractFeatureTypeInfo(el, version));
+
+  return { version, layers };
+}
+
+// Descarga y parsea el GetCapabilities de un servicio WFS. Igual que
+// fetchWmsCapabilities: único punto que hace fetch, bajo demanda.
+async function fetchWfsCapabilities(baseUrl) {
+  let capUrl;
+  try {
+    capUrl = buildGetCapabilitiesUrl(baseUrl, 'WFS');
+  } catch (e) {
+    throw new Error('La URL del servicio WFS no es válida.');
+  }
+
+  let response;
+  try {
+    response = await fetch(capUrl);
+  } catch (e) {
+    throw new Error('No se pudo conectar con el servicio WFS — revisá la URL, tu conexión a internet, o que el servidor permita solicitudes desde el navegador (CORS).');
+  }
+
+  if (!response.ok) {
+    throw new Error(`El servicio WFS respondió con error HTTP ${response.status}${response.statusText ? ' ' + response.statusText : ''}.`);
+  }
+
+  const xmlText = await response.text();
+  return parseWfsCapabilities(xmlText);
+}
+
+// Arma la URL de GetFeature: siempre pide GeoJSON (RFC 7946 = siempre
+// lon/lat, evita por completo el lío de orden de ejes de WFS 1.1/2.0),
+// limita la cantidad de features, y opcionalmente filtra por bbox.
+// El bbox se manda como "west,south,east,north,EPSG:4326" — verificado
+// contra GeoServer real: sin el sufijo "EPSG:4326" explícito, WFS 2.0.0
+// interpreta el bbox en orden lat/lon (eje por defecto de EPSG:4326 en
+// WFS 2.0), lo que descartaba silenciosamente todos los resultados.
+function buildGetFeatureUrl(baseUrl, typeName, opts) {
+  opts = opts || {};
+  const url = new URL(baseUrl);
+  url.searchParams.set('service', 'WFS');
+  url.searchParams.set('request', 'GetFeature');
+  url.searchParams.set('typeName', typeName);
+  url.searchParams.set('outputFormat', 'application/json');
+  const limit = opts.limit || WFS_FEATURE_LIMIT;
+  // count (WFS 2.0.0) y maxFeatures (WFS 1.0.0/1.1.0): se mandan los dos
+  // sin ramificar por versión — GeoServer ignora el que no le corresponde.
+  url.searchParams.set('count', String(limit));
+  url.searchParams.set('maxFeatures', String(limit));
+  if (opts.bbox) {
+    const b = opts.bbox;
+    url.searchParams.set('bbox', `${b.west},${b.south},${b.east},${b.north},EPSG:4326`);
+  }
+  return url.toString();
+}
+
+// Descarga los features de una capa WFS como GeoJSON. Si el servidor
+// responde con error (HTTP != 200), intenta extraer el mensaje legible del
+// <ows:ExceptionReport>/<ServiceException> en vez de mostrar solo el status.
+async function fetchWfsFeatures(baseUrl, typeName, opts) {
+  const url = buildGetFeatureUrl(baseUrl, typeName, opts);
+
+  let response;
+  try {
+    response = await fetch(url);
+  } catch (e) {
+    throw new Error('No se pudo conectar con el servicio WFS — revisá la URL, tu conexión a internet, o que el servidor permita solicitudes desde el navegador (CORS).');
+  }
+
+  const bodyText = await response.text();
+
+  if (!response.ok) {
+    const parser = new DOMParser();
+    const xmlDoc = parser.parseFromString(bodyText, 'text/xml');
+    const excEl = findByLocalName(xmlDoc, 'ExceptionText') || xmlDoc.querySelector('ServiceException');
+    const msg = excEl ? excEl.textContent.trim() : '';
+    throw new Error(msg ? `El servicio WFS devolvió un error: ${msg}` : `El servicio WFS respondió con error HTTP ${response.status}.`);
+  }
+
+  let geojson;
+  try {
+    geojson = JSON.parse(bodyText);
+  } catch (e) {
+    throw new Error('El servicio WFS no devolvió un GeoJSON válido — verificá que soporte outputFormat=application/json.');
+  }
+
+  if (!geojson || geojson.type !== 'FeatureCollection') {
+    throw new Error('La respuesta del servicio WFS no es un FeatureCollection GeoJSON válido.');
+  }
+
+  return geojson;
+}
+
+// Capas devueltas por el último "Buscar capas" de WFS — igual que
+// wmsDiscoveredLayers, vive en memoria para filtrar sin re-consultar el servidor.
+let wfsDiscoveredLayers = [];
+let wfsSelectedLayerName = null;
+
+// Reutiliza el mismo maquetado/CSS que renderWmsLayerList (clases .wms-*):
+// es la misma lista de "capas remotas encontradas", solo cambia el origen
+// de los datos (FeatureType de WFS en vez de Layer de WMS).
+function renderWfsLayerList(layers, filterText) {
+  const listEl = document.getElementById('wfsLayerList');
+  const norm = (filterText || '').trim().toLowerCase();
+  const filtered = norm
+    ? layers.filter(layer => {
+        const haystack = `${layer.name || ''} ${layer.title || ''} ${layer.abstract || ''}`.toLowerCase();
+        return haystack.includes(norm);
+      })
+    : layers;
+
+  if (!filtered.length) {
+    listEl.innerHTML = `<div class="wms-layer-empty">${layers.length ? 'Ninguna capa coincide con el filtro.' : 'El servicio no tiene capas con nombre disponibles.'}</div>`;
+    return;
+  }
+
+  const LIMIT = 200;
+  const visible = filtered.slice(0, LIMIT);
+
+  const rows = visible.map(layer => {
+    const abstractHtml = layer.abstract
+      ? `<div class="wms-layer-item-abstract" title="${escapeHtml(layer.abstract)}">${escapeHtml(layer.abstract)}</div>`
+      : '';
+    const selectedClass = layer.name === wfsSelectedLayerName ? ' selected' : '';
+    return `
+      <div class="wms-layer-item${selectedClass}">
+        <div class="wms-layer-item-title">${escapeHtml(layer.title || layer.name)}</div>
+        <div class="wms-layer-item-name">${escapeHtml(layer.name)}</div>
+        ${abstractHtml}
+      </div>
+    `;
+  }).join('');
+
+  const truncatedNote = filtered.length > LIMIT
+    ? `<div class="wms-layer-empty">Mostrando ${LIMIT} de ${filtered.length} — refiná el filtro para ver más.</div>`
+    : '';
+
+  listEl.innerHTML = rows + truncatedNote;
+
+  const rowEls = listEl.querySelectorAll('.wms-layer-item');
+  rowEls.forEach((rowEl, i) => {
+    rowEl.addEventListener('click', () => selectWfsLayer(visible[i]));
+  });
+}
+
+// A diferencia de selectWmsLayer (que difiere el fitBounds hasta agregar la
+// capa), acá el mapa se mueve al elegir: la vista actual ES el filtro que
+// va a usar la descarga (ver buildGetFeatureUrl), así que hay que moverla
+// primero para que "Cargar capa" traiga algo relevante.
+function selectWfsLayer(layer) {
+  wfsSelectedLayerName = layer.name;
+  document.getElementById('wfsNameInput').value = (layer.title || layer.name) + ' (WFS)';
+  document.getElementById('wfsLayerInput').value = layer.name;
+  renderWfsLayerList(wfsDiscoveredLayers, document.getElementById('wfsLayerFilterInput').value);
+
+  if (layer.bbox) {
+    const b = layer.bbox;
+    if ([b.south, b.west, b.north, b.east].every(Number.isFinite)) {
+      map.fitBounds([[b.south, b.west], [b.north, b.east]], { padding: [40, 40] });
+    }
+  }
 }
 
 async function addKmzFile(arrayBuffer, filename) {
@@ -2558,6 +2852,119 @@ document.getElementById('wmsRunBtn').addEventListener('click', () => {
     status.textContent = `✅ "${added.name}" agregada.`;
     pendingWmsBounds = null;
     setTimeout(() => document.getElementById('wmsModal').classList.remove('open'), 700);
+  }
+});
+
+// Limpia el resultado de "Buscar capas" de WFS (lista, filtro, estado) —
+// mismo propósito que resetWmsDiscovery, para no dejar una búsqueda vieja
+// visible al abrir el modal de nuevo.
+function resetWfsDiscovery() {
+  wfsDiscoveredLayers = [];
+  wfsSelectedLayerName = null;
+  document.getElementById('wfsDiscoverStatus').textContent = '';
+  document.getElementById('wfsLayerFilterInput').value = '';
+  document.getElementById('wfsLayerFilterWrap').hidden = true;
+  document.getElementById('wfsLayerList').innerHTML = '';
+}
+
+document.getElementById('wfsbtn').addEventListener('click', () => {
+  document.getElementById('wfsModal').classList.add('open');
+  document.getElementById('wfsStatus').textContent = '';
+  resetWfsDiscovery();
+});
+document.getElementById('wfsModalClose').addEventListener('click', () => {
+  document.getElementById('wfsModal').classList.remove('open');
+});
+document.getElementById('wfsModal').addEventListener('click', (e) => {
+  if (e.target.id === 'wfsModal') document.getElementById('wfsModal').classList.remove('open');
+});
+document.getElementById('wfsDiscoverBtn').addEventListener('click', async () => {
+  const url = document.getElementById('wfsUrlInput').value.trim();
+  const status = document.getElementById('wfsDiscoverStatus');
+  const filterWrap = document.getElementById('wfsLayerFilterWrap');
+  const filterInput = document.getElementById('wfsLayerFilterInput');
+  const discoverBtn = document.getElementById('wfsDiscoverBtn');
+
+  if (!url) {
+    status.textContent = 'Ingresá la URL del servicio WFS.';
+    return;
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    status.textContent = 'La URL debe empezar con http:// o https://';
+    return;
+  }
+
+  discoverBtn.disabled = true;
+  filterWrap.hidden = true;
+  filterInput.value = '';
+  wfsDiscoveredLayers = [];
+  wfsSelectedLayerName = null;
+  status.textContent = 'Buscando...';
+
+  try {
+    const result = await fetchWfsCapabilities(url);
+    wfsDiscoveredLayers = result.layers;
+    if (wfsDiscoveredLayers.length) {
+      status.textContent = `${wfsDiscoveredLayers.length} capa${wfsDiscoveredLayers.length === 1 ? '' : 's'} encontrada${wfsDiscoveredLayers.length === 1 ? '' : 's'} (WFS ${result.version}).`;
+      filterWrap.hidden = false;
+      renderWfsLayerList(wfsDiscoveredLayers, '');
+    } else {
+      status.textContent = 'El servicio respondió pero no tiene capas con nombre disponibles.';
+    }
+  } catch (e) {
+    status.textContent = `❌ ${e.message}`;
+  } finally {
+    discoverBtn.disabled = false;
+  }
+});
+document.getElementById('wfsLayerFilterInput').addEventListener('input', (e) => {
+  renderWfsLayerList(wfsDiscoveredLayers, e.target.value);
+});
+document.getElementById('wfsRunBtn').addEventListener('click', async () => {
+  const name = document.getElementById('wfsNameInput').value;
+  const url = document.getElementById('wfsUrlInput').value.trim();
+  const typeName = document.getElementById('wfsLayerInput').value.trim();
+  const status = document.getElementById('wfsStatus');
+  const runBtn = document.getElementById('wfsRunBtn');
+
+  if (!url || !typeName) {
+    status.textContent = 'Completá la URL y el nombre de la capa WFS.';
+    return;
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    status.textContent = 'La URL debe empezar con http:// o https://';
+    return;
+  }
+
+  // Se descarga solo lo visible en el mapa ahora mismo — ver buildGetFeatureUrl.
+  // Si el usuario seleccionó una capa de la lista, selectWfsLayer() ya movió
+  // el mapa a su BoundingBox, así que esta vista suele tener datos.
+  const b = map.getBounds();
+  const bbox = { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
+
+  runBtn.disabled = true;
+  status.textContent = 'Descargando features...';
+
+  try {
+    const geojson = await fetchWfsFeatures(url, typeName, { bbox, limit: WFS_FEATURE_LIMIT });
+    const total = geojson.features.length;
+    if (!total) {
+      status.textContent = 'El servicio no devolvió elementos para la vista actual del mapa — alejá el zoom o elegí la capa de la lista (ajusta el mapa a su área) y volvé a cargar.';
+      return;
+    }
+
+    const displayName = (name || '').trim() || typeName;
+    addGeoJsonFile(geojson, displayName);
+
+    const totalAvailable = typeof geojson.totalFeatures === 'number' ? geojson.totalFeatures : null;
+    status.textContent = (totalAvailable && totalAvailable > total)
+      ? `✅ "${displayName}" agregada — ${total} de ${totalAvailable} elementos (vista actual, límite ${WFS_FEATURE_LIMIT}).`
+      : `✅ "${displayName}" agregada — ${total} elemento${total === 1 ? '' : 's'}.`;
+    setTimeout(() => document.getElementById('wfsModal').classList.remove('open'), 900);
+  } catch (e) {
+    status.textContent = `❌ ${e.message}`;
+  } finally {
+    runBtn.disabled = false;
   }
 });
 
