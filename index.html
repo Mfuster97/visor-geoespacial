@@ -1723,6 +1723,25 @@ function kmlPointCoordsToGeoJson(text) {
   }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
 }
 
+// Extrae TODOS los pares etiqueta/valor de una tabla de atributos del KML
+// (no solo Estado/Región) — recorre cada <tr> con exactamente 2 <td>,
+// ignorando la fila de título (que trae 1 sola celda).
+function extractAllFieldsFromDescHtml(descHtml) {
+  if (!descHtml) return {};
+  const div = document.createElement('div');
+  div.innerHTML = descHtml;
+  const fields = {};
+  div.querySelectorAll('tr').forEach(tr => {
+    const tds = tr.querySelectorAll(':scope > td');
+    if (tds.length === 2) {
+      const label = tds[0].textContent.trim();
+      const value = tds[1].textContent.trim();
+      if (label && value && value !== '-') fields[label] = value;
+    }
+  });
+  return fields;
+}
+
 // Convierte un KML (texto) a un FeatureCollection GeoJSON estándar
 // ([lon,lat], igual que ya viene en el KML — no hace falta invertir).
 function kmlToGeoJSON(kmlText) {
@@ -1738,10 +1757,20 @@ function kmlToGeoJSON(kmlText) {
     const desc = descEl ? descEl.textContent.trim() : '';
     const properties = {};
     if (name) properties.Name = name;
-    const estado = extractEstado(desc);
-    const region = extractRegion(desc);
-    if (estado) properties.Estado = estado;
-    if (region) properties.Region = region;
+
+    // Si la descripción trae una tabla de atributos (formato típico del
+    // SEA), se preservan TODAS sus columnas. Si es texto libre (KML hecho
+    // a mano en Google Earth, sin tabla), se guarda igual como "Descrip"
+    // para no perder el dato.
+    const tableFields = extractAllFieldsFromDescHtml(desc);
+    if (Object.keys(tableFields).length) {
+      Object.assign(properties, tableFields);
+    } else if (desc) {
+      const plain = document.createElement('div');
+      plain.innerHTML = desc;
+      const text = plain.textContent.trim();
+      if (text) properties.Descrip = text;
+    }
 
     const point = pm.querySelector('Point > coordinates');
     const lineString = pm.querySelector('LineString > coordinates');
@@ -1861,6 +1890,21 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+// shp-write escribe los textos en Windows-1252 (single-byte, así entran bien
+// tildes/ñ) pero no genera el .cpg que declara esa codificación — sin él,
+// QGIS/ArcGIS y hasta nuestro propio lector (shpjs) asumen UTF-8 por defecto
+// y corrompen los acentos (ej. "Región" → "Regi�n"). Se agrega el .cpg
+// correspondiente a cada shapefile (point/line/polygon) antes de descargar.
+async function addCpgToShapefileZip(blob) {
+  const zip = await JSZip.loadAsync(blob);
+  const bases = new Set();
+  Object.keys(zip.files).forEach(name => {
+    if (/\.shp$/i.test(name)) bases.add(name.replace(/\.shp$/i, ''));
+  });
+  bases.forEach(base => zip.file(base + '.cpg', 'windows-1252'));
+  return zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
+}
+
 async function convertKmlFileToShapefile(file) {
   const name = file.name.toLowerCase();
   let kmlText;
@@ -1879,7 +1923,8 @@ async function convertKmlFileToShapefile(file) {
   const flat = { type: 'FeatureCollection', features: flattenForShapefile(geojson.features) };
   if (!flat.features.length) throw new Error(`"${file.name}" no tiene geometrías reconocibles`);
 
-  const blob = await shpwrite.zip(flat, { outputType: 'blob', compression: 'DEFLATE' });
+  const rawBlob = await shpwrite.zip(flat, { outputType: 'blob', compression: 'DEFLATE' });
+  const blob = await addCpgToShapefileZip(rawBlob);
   const baseName = file.name.replace(/\.(kmz|kml)$/i, '');
   downloadBlob(blob, `${baseName}_shapefile.zip`);
 }
