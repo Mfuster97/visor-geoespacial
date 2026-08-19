@@ -9,6 +9,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://unpkg.com/shpjs@4.0.4/dist/shp.js"></script>
+<script src="https://unpkg.com/@mapbox/shp-write@0.4.3/shpwrite.js"></script>
 
 <style>
   :root {
@@ -552,6 +553,62 @@
   }
   .popup-desc a { color: #ffffff !important; text-decoration: underline; word-break: break-all; }
 
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 5000;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    width: min(440px, 100%);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+  }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .modal-header h2 { font-size: 16px; margin: 0; }
+  .modal-close {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+  }
+  .modal-close:hover { color: var(--text); }
+  .modal-hint { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; margin: 0 0 14px; }
+  #convertFileInput {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    color: var(--text);
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+  .modal-primary-btn {
+    width: 100%;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .modal-primary-btn:hover { background: #3d7ae0; }
+  .modal-status { margin-top: 10px; font-size: 12.5px; color: var(--text-dim); min-height: 16px; }
+
   #toast {
     position: fixed;
     bottom: 20px;
@@ -652,9 +709,27 @@
   <button id="measureclearbtn" class="secondary">Borrar medición</button>
   <button id="clearbtn" class="secondary">Limpiar todo</button>
   <button id="exportbtn" class="secondary">💾 Guardar y compartir</button>
+  <button id="convertbtn" class="secondary">🔄 Convertir SHP⇄KMZ</button>
   <button id="filebtn">Agregar capa</button>
   <input type="file" id="fileinput" accept=".kmz,.kml,.zip,.shp,.dbf,.shx,.prj,.geojson,.json" multiple />
 </header>
+
+<div id="convertModal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2>🔄 Convertir KMZ ⇄ Shapefile</h2>
+      <button id="convertModalClose" class="modal-close" aria-label="Cerrar">×</button>
+    </div>
+    <p class="modal-hint">
+      Subí un <b>.kmz</b>/<b>.kml</b> para convertirlo a Shapefile, o un <b>.shp</b>
+      (+ .dbf/.prj sueltos, o zipeado) para convertirlo a KMZ. Todo se procesa en tu
+      navegador — no se sube nada a internet.
+    </p>
+    <input type="file" id="convertFileInput" accept=".kmz,.kml,.zip,.shp,.dbf,.shx,.prj,.geojson,.json" multiple />
+    <button id="convertRunBtn" class="modal-primary-btn">Convertir y descargar</button>
+    <div id="convertStatus" class="modal-status"></div>
+  </div>
+</div>
 
 <div id="sidebarBackdrop"></div>
 <div class="layout">
@@ -1565,14 +1640,13 @@ function addGeoJsonFile(geojson, filename) {
   refreshAll();
 }
 
-async function addShapefileZip(arrayBuffer, filename) {
-  const geojson = await shp(arrayBuffer);
-  addGeoJsonFile(geojson, filename);
+async function shapefileZipToGeoJson(arrayBuffer) {
+  return shp(arrayBuffer);
 }
 
 // Combina un set de archivos sueltos .shp/.dbf/.prj/.shx (mismo nombre base,
 // seleccionados juntos) sin necesidad de zipearlos primero.
-async function addShapefileParts(group) {
+async function shapefilePartsToGeoJson(group) {
   const shpBuf = await group.shp.arrayBuffer();
   const prjText = group.prj ? await group.prj.text() : undefined;
   const geometries = shp.parseShp(shpBuf, prjText);
@@ -1582,7 +1656,16 @@ async function addShapefileParts(group) {
     const cpgText = group.cpg ? await group.cpg.text() : undefined;
     attributes = shp.parseDbf(dbfBuf, cpgText);
   }
-  const geojson = shp.combine([geometries, attributes]);
+  return shp.combine([geometries, attributes]);
+}
+
+async function addShapefileZip(arrayBuffer, filename) {
+  const geojson = await shapefileZipToGeoJson(arrayBuffer);
+  addGeoJsonFile(geojson, filename);
+}
+
+async function addShapefileParts(group) {
+  const geojson = await shapefilePartsToGeoJson(group);
   addGeoJsonFile(geojson, group.shp.name);
 }
 
@@ -1607,6 +1690,238 @@ function groupShapefileParts(files) {
   });
   return { consumed, groups };
 }
+
+// ---- Conversor KMZ ⇄ Shapefile ------------------------------------------
+
+function kmlPointCoordsToGeoJson(text) {
+  return text.trim().split(/\s+/).map(triplet => {
+    const [lon, lat] = triplet.split(',').map(Number);
+    return [lon, lat];
+  }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
+}
+
+// Convierte un KML (texto) a un FeatureCollection GeoJSON estándar
+// ([lon,lat], igual que ya viene en el KML — no hace falta invertir).
+function kmlToGeoJSON(kmlText) {
+  const parser = new DOMParser();
+  const xmlDoc = parser.parseFromString(kmlText, 'text/xml');
+  const placemarks = xmlDoc.querySelectorAll('Placemark');
+  const features = [];
+
+  placemarks.forEach(pm => {
+    const nameEl = pm.querySelector(':scope > name');
+    const descEl = pm.querySelector(':scope > description');
+    const name = nameEl ? nameEl.textContent.trim() : '';
+    const desc = descEl ? descEl.textContent.trim() : '';
+    const properties = {};
+    if (name) properties.Name = name;
+    const estado = extractEstado(desc);
+    const region = extractRegion(desc);
+    if (estado) properties.Estado = estado;
+    if (region) properties.Region = region;
+
+    const point = pm.querySelector('Point > coordinates');
+    const lineString = pm.querySelector('LineString > coordinates');
+    const polygon = pm.querySelector('Polygon');
+    const multiGeom = pm.querySelector('MultiGeometry');
+
+    let geometry = null;
+    if (point) {
+      const c = kmlPointCoordsToGeoJson(point.textContent)[0];
+      if (c) geometry = { type: 'Point', coordinates: c };
+    } else if (lineString) {
+      const coords = kmlPointCoordsToGeoJson(lineString.textContent);
+      if (coords.length > 1) geometry = { type: 'LineString', coordinates: coords };
+    } else if (polygon) {
+      const outer = polygon.querySelector('outerBoundaryIs coordinates');
+      if (outer) {
+        const coords = kmlPointCoordsToGeoJson(outer.textContent);
+        if (coords.length > 2) geometry = { type: 'Polygon', coordinates: [coords] };
+      }
+    } else if (multiGeom) {
+      const geoms = [];
+      multiGeom.querySelectorAll('Point > coordinates').forEach(c => {
+        const co = kmlPointCoordsToGeoJson(c.textContent)[0];
+        if (co) geoms.push({ type: 'Point', coordinates: co });
+      });
+      multiGeom.querySelectorAll('LineString > coordinates').forEach(c => {
+        const co = kmlPointCoordsToGeoJson(c.textContent);
+        if (co.length > 1) geoms.push({ type: 'LineString', coordinates: co });
+      });
+      multiGeom.querySelectorAll('Polygon outerBoundaryIs coordinates').forEach(c => {
+        const co = kmlPointCoordsToGeoJson(c.textContent);
+        if (co.length > 2) geoms.push({ type: 'Polygon', coordinates: [co] });
+      });
+      if (geoms.length === 1) geometry = geoms[0];
+      else if (geoms.length > 1) geometry = { type: 'GeometryCollection', geometries: geoms };
+    }
+
+    if (geometry) features.push({ type: 'Feature', properties, geometry });
+  });
+
+  return { type: 'FeatureCollection', features };
+}
+
+// shp-write no entiende GeometryCollection ni MultiPoint: se separan en
+// features individuales del tipo que sí soporta (Point/LineString/Polygon/
+// MultiLineString/MultiPolygon).
+function flattenForShapefile(features) {
+  const out = [];
+  features.forEach(f => {
+    const g = f.geometry;
+    if (!g) return;
+    if (g.type === 'GeometryCollection') {
+      g.geometries.forEach(sub => out.push({ type: 'Feature', properties: f.properties, geometry: sub }));
+    } else if (g.type === 'MultiPoint') {
+      g.coordinates.forEach(c => out.push({ type: 'Feature', properties: f.properties, geometry: { type: 'Point', coordinates: c } }));
+    } else {
+      out.push(f);
+    }
+  });
+  return out;
+}
+
+function escapeXml(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function geomToKmlInner(geom) {
+  const c = pt => `${pt[0]},${pt[1]},0`;
+  switch (geom.type) {
+    case 'Point': return `<Point><coordinates>${c(geom.coordinates)}</coordinates></Point>`;
+    case 'LineString': return `<LineString><coordinates>${geom.coordinates.map(c).join(' ')}</coordinates></LineString>`;
+    case 'Polygon': return `<Polygon><outerBoundaryIs><LinearRing><coordinates>${geom.coordinates[0].map(c).join(' ')}</coordinates></LinearRing></outerBoundaryIs></Polygon>`;
+    case 'MultiPoint': return geom.coordinates.map(pt => `<Point><coordinates>${c(pt)}</coordinates></Point>`).join('');
+    case 'MultiLineString': return geom.coordinates.map(line => `<LineString><coordinates>${line.map(c).join(' ')}</coordinates></LineString>`).join('');
+    case 'MultiPolygon': return geom.coordinates.map(poly => `<Polygon><outerBoundaryIs><LinearRing><coordinates>${poly[0].map(c).join(' ')}</coordinates></LinearRing></outerBoundaryIs></Polygon>`).join('');
+    default: return '';
+  }
+}
+
+function geometryToKmlXml(geom) {
+  if (!geom) return '';
+  if (geom.type === 'GeometryCollection') {
+    return `<MultiGeometry>${geom.geometries.map(geomToKmlInner).join('')}</MultiGeometry>`;
+  }
+  if (geom.type.startsWith('Multi')) {
+    return `<MultiGeometry>${geomToKmlInner(geom)}</MultiGeometry>`;
+  }
+  return geomToKmlInner(geom);
+}
+
+// Convierte un FeatureCollection GeoJSON a texto KML, con la ficha de
+// atributos como tabla (igual formato que usan los popups del visor).
+function geoJsonToKml(geojson, docName) {
+  const features = geojson.type === 'FeatureCollection' ? (geojson.features || []) : [geojson];
+  const placemarks = features.map(f => {
+    if (!f.geometry) return '';
+    const geomXml = geometryToKmlXml(f.geometry);
+    if (!geomXml) return '';
+    const props = f.properties || {};
+    const name = props.name || props.Name || props.NOMBRE || props.Nombre || props.nombre || '';
+    const tableHtml = buildPropsTableHtml(props);
+    const descXml = tableHtml ? `<description><![CDATA[${tableHtml}]]></description>` : '';
+    return `<Placemark><name>${escapeXml(name)}</name>${descXml}${geomXml}</Placemark>`;
+  }).join('');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${escapeXml(docName)}</name>${placemarks}</Document></kml>`;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function convertKmlFileToShapefile(file) {
+  const name = file.name.toLowerCase();
+  let kmlText;
+  if (name.endsWith('.kmz')) {
+    const buf = await file.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+    let kmlFile = null;
+    zip.forEach((relPath, f) => { if (relPath.toLowerCase().endsWith('.kml') && !kmlFile) kmlFile = f; });
+    if (!kmlFile) throw new Error(`"${file.name}" no tiene un .kml adentro`);
+    kmlText = await kmlFile.async('text');
+  } else {
+    kmlText = await file.text();
+  }
+
+  const geojson = kmlToGeoJSON(kmlText);
+  const flat = { type: 'FeatureCollection', features: flattenForShapefile(geojson.features) };
+  if (!flat.features.length) throw new Error(`"${file.name}" no tiene geometrías reconocibles`);
+
+  const blob = await shpwrite.zip(flat, { outputType: 'blob', compression: 'DEFLATE' });
+  const baseName = file.name.replace(/\.(kmz|kml)$/i, '');
+  downloadBlob(blob, `${baseName}_shapefile.zip`);
+}
+
+async function convertFilesToKmz(files) {
+  const zipFile = files.find(f => f.name.toLowerCase().endsWith('.zip'));
+  const geojsonFile = files.find(f => /\.(geojson|json)$/i.test(f.name));
+
+  let geojson;
+  let baseFile;
+  if (zipFile) {
+    geojson = await shapefileZipToGeoJson(await zipFile.arrayBuffer());
+    baseFile = zipFile;
+  } else if (geojsonFile) {
+    geojson = JSON.parse(await geojsonFile.text());
+    baseFile = geojsonFile;
+  } else {
+    const { groups } = groupShapefileParts(files);
+    if (!groups.length) throw new Error('Seleccioná un .shp (con su .dbf/.prj) o un .zip con el shapefile');
+    geojson = await shapefilePartsToGeoJson(groups[0]);
+    baseFile = groups[0].shp;
+  }
+
+  const collections = Array.isArray(geojson) ? geojson : [geojson];
+  const merged = { type: 'FeatureCollection', features: collections.flatMap(fc => fc.features || []) };
+  if (!merged.features.length) throw new Error('No se encontraron geometrías para convertir');
+
+  const baseName = baseFile.name.replace(/\.(zip|geojson|json|shp)$/i, '');
+  const kmlText = geoJsonToKml(merged, baseName);
+
+  const zip = new JSZip();
+  zip.file('doc.kml', kmlText);
+  const blob = await zip.generateAsync({ type: 'blob' });
+  downloadBlob(blob, `${baseName}.kmz`);
+}
+
+document.getElementById('convertbtn').addEventListener('click', () => {
+  document.getElementById('convertModal').classList.add('open');
+  document.getElementById('convertStatus').textContent = '';
+});
+document.getElementById('convertModalClose').addEventListener('click', () => {
+  document.getElementById('convertModal').classList.remove('open');
+});
+document.getElementById('convertModal').addEventListener('click', (e) => {
+  if (e.target.id === 'convertModal') document.getElementById('convertModal').classList.remove('open');
+});
+document.getElementById('convertRunBtn').addEventListener('click', async () => {
+  const files = Array.from(document.getElementById('convertFileInput').files);
+  const status = document.getElementById('convertStatus');
+  if (!files.length) { status.textContent = 'Elegí un archivo primero.'; return; }
+
+  status.textContent = 'Convirtiendo…';
+  try {
+    const kmlLike = files.filter(f => /\.(kmz|kml)$/i.test(f.name));
+    if (kmlLike.length) {
+      for (const f of kmlLike) await convertKmlFileToShapefile(f);
+    } else {
+      await convertFilesToKmz(files);
+    }
+    status.textContent = '✅ Listo — revisá tus descargas.';
+  } catch (err) {
+    console.error(err);
+    status.textContent = '❌ ' + err.message;
+  }
+});
 
 // Reconstruye una capa a partir de los datos guardados en un visor exportado,
 // preservando color/tipo/visibilidad originales (no se re-asignan).
@@ -1783,6 +2098,8 @@ function clearAll() {
   loadedFiles = [];
   idCounter = 0;
   fileIdCounter = 0;
+  if (elevationMarker) { map.removeLayer(elevationMarker); elevationMarker = null; }
+  if (searchMarker) { map.removeLayer(searchMarker); searchMarker = null; }
   refreshAll();
 }
 
@@ -2086,21 +2403,29 @@ async function getElevation(lat, lng) {
 async function onElevationClick(e) {
   const { lat, lng } = e.latlng;
   if (elevationMarker) map.removeLayer(elevationMarker);
-  elevationMarker = L.marker([lat, lng], {
+  const marker = L.marker([lat, lng], {
     icon: L.divIcon({ className: 'search-pin', html: '⛰️', iconSize: [26, 26], iconAnchor: [13, 26] })
   }).addTo(map);
-  elevationMarker.bindPopup(`<div class="popup-title">Consultando elevación…</div>`).openPopup();
+  elevationMarker = marker;
+  marker.bindPopup(`<div class="popup-title">Consultando elevación…</div>`).openPopup();
   try {
     const elevation = await getElevation(lat, lng);
-    elevationMarker.setPopupContent(
+    marker.setPopupContent(
       `<div class="popup-title">⛰️ ${Math.round(elevation)} m s.n.m.</div>` +
       `<div style="color:var(--text-dim); font-size:11px; margin-top:2px;">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>`
     );
   } catch (err) {
     console.error(err);
-    elevationMarker.setPopupContent(`<div class="popup-title">Error al consultar elevación</div>`);
+    marker.setPopupContent(`<div class="popup-title">Error al consultar elevación</div>`);
     toast('Error al consultar elevación: ' + err.message);
   }
+  // Se borra solo a los 5s (si para entonces no lo reemplazó otro clic).
+  setTimeout(() => {
+    if (elevationMarker === marker) {
+      map.removeLayer(marker);
+      elevationMarker = null;
+    }
+  }, 5000);
 }
 
 function startElevation() {
