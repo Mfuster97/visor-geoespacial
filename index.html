@@ -107,6 +107,21 @@
   }
   .unit-select:hover { border-color: var(--text-dim); }
 
+  #basemapControl {
+    position: absolute;
+    top: 12px;
+    left: 56px;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+
   #measurePanel {
     display: none;
     position: absolute;
@@ -532,6 +547,7 @@
     header .filename { order: 10; flex-basis: 100%; font-size: 11px; }
     button.secondary, #filebtn, #exportbtn { font-size: 12px; padding: 6px 10px; }
     .snap-toggle { font-size: 11px; }
+    #basemapControl { top: 80px; left: 12px; flex-direction: column; align-items: stretch; gap: 6px; }
   }
 
   @media (max-width: 420px) {
@@ -577,6 +593,18 @@
   </div>
   <div style="flex:1; position:relative;">
     <div id="map"></div>
+    <div id="basemapControl">
+      <select id="basemapSelect" class="unit-select" title="Mapa base">
+        <option value="satelite">🛰️ Satélite</option>
+        <option value="calles">🗺️ Calles</option>
+        <option value="topografico">⛰️ Topográfico</option>
+        <option value="oscuro">🌑 Oscuro</option>
+        <option value="claro">☀️ Claro</option>
+      </select>
+      <label class="snap-toggle" title="Límites, rutas y nombres de lugares">
+        <input type="checkbox" id="referenceToggle" checked /> Nombres/límites
+      </label>
+    </div>
     <div id="measurePanel"></div>
     <div id="empty">
       <div class="big">Arrastrá uno o varios archivos aquí</div>
@@ -599,16 +627,41 @@ const ORIGINAL_HTML = document.documentElement.outerHTML;
 // para abrir su ficha, sin tener que acertar el pixel exacto del trazo.
 const map = L.map('map', { zoomControl: true, renderer: L.svg({ tolerance: 10 }) }).setView([-27.5, -70.0], 6);
 
-// Base satelital (Esri World Imagery)
-L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-  attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
-  maxZoom: 19
-}).addTo(map);
+// ---- Mapas base --------------------------------------------------------
+const BASEMAPS = {
+  satelite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
+    maxZoom: 19
+  }),
+  calles: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19
+  }),
+  topografico: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, HERE, Garmin, USGS, NGA',
+    maxZoom: 19
+  }),
+  oscuro: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    maxZoom: 19,
+    subdomains: 'abcd'
+  }),
+  claro: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+    maxZoom: 19,
+    subdomains: 'abcd'
+  })
+};
 
-// Referencia: límites, rutas y nombres de lugares sobre la imagen satelital
-L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+// Capa de referencia (límites, rutas, nombres de lugares) que se puede
+// superponer arriba de cualquier mapa base — sobre todo útil con satélite.
+const referenceLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
   maxZoom: 19
-}).addTo(map);
+});
+
+let currentBasemap = BASEMAPS.satelite;
+currentBasemap.addTo(map);
+referenceLayer.addTo(map);
 
 let layerGroup = L.layerGroup().addTo(map);
 let allItems = []; // {id, name, folder, type, layer, fileId, fileColor, estado}
@@ -1823,6 +1876,16 @@ document.getElementById('measureclearbtn').addEventListener('click', () => {
 document.getElementById('unitSelect').addEventListener('change', (e) => {
   measureUnit = e.target.value;
   redrawMeasure();
+});
+document.getElementById('basemapSelect').addEventListener('change', (e) => {
+  map.removeLayer(currentBasemap);
+  currentBasemap = BASEMAPS[e.target.value];
+  currentBasemap.addTo(map);
+  if (map.hasLayer(referenceLayer)) referenceLayer.bringToFront();
+});
+document.getElementById('referenceToggle').addEventListener('change', (e) => {
+  if (e.target.checked) referenceLayer.addTo(map);
+  else map.removeLayer(referenceLayer);
 });
 
 const dropzone = document.getElementById('dropzone');
