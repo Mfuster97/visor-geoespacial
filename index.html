@@ -723,6 +723,41 @@
   }
   .wms-layer-empty { padding: 12px 10px; font-size: 12.5px; color: var(--text-dim); text-align: center; }
 
+  /* Catálogo de servicios WMS/WFS preconfigurados */
+  #catalogModal .modal-box { width: min(560px, 100%); max-height: 85vh; display: flex; flex-direction: column; }
+  .catalog-chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  .catalog-chip { font-size: 12px; padding: 5px 10px; }
+  .catalog-result-count { font-size: 11.5px; color: var(--text-dim); margin: 2px 0 8px; }
+  .catalog-list {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-right: 2px;
+  }
+  .catalog-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel-2);
+    padding: 12px;
+  }
+  .catalog-card-name { font-size: 14px; font-weight: 700; color: var(--text); }
+  .catalog-card-org { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
+  .catalog-card-badges { display: flex; gap: 6px; margin-top: 6px; }
+  .catalog-badge {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 2px 7px;
+    border-radius: 4px;
+  }
+  .catalog-badge-type { background: rgba(79, 140, 255, 0.2); color: #8fb4ff; }
+  .catalog-badge-category { background: rgba(255, 255, 255, 0.1); color: var(--text-dim); }
+  .catalog-card-desc { font-size: 12.5px; color: var(--text-dim); margin: 8px 0 10px; line-height: 1.4; }
+  .catalog-use-btn { width: 100%; padding: 8px; font-size: 12.5px; }
+  .catalog-empty { padding: 20px 10px; font-size: 12.5px; color: var(--text-dim); text-align: center; }
+
   #toast {
     position: fixed;
     bottom: 20px;
@@ -826,6 +861,7 @@
   <button id="convertbtn" class="secondary">🔄 Convertir SHP⇄KMZ</button>
   <button id="wmsbtn" class="secondary">🛰️ + Capa WMS</button>
   <button id="wfsbtn" class="secondary">🧩 + Capa WFS</button>
+  <button id="catalogbtn" class="secondary">🌐 Catálogo de servicios</button>
   <button id="filebtn">Agregar capa</button>
   <input type="file" id="fileinput" accept=".kmz,.kml,.zip,.shp,.dbf,.shx,.prj,.geojson,.json" multiple />
 </header>
@@ -911,6 +947,36 @@
     <input type="text" id="wfsLayerInput" class="modal-text-input" value="SNASPE:snap" />
     <button id="wfsRunBtn" class="modal-primary-btn" style="margin-top:14px;">Cargar capa</button>
     <div id="wfsStatus" class="modal-status"></div>
+  </div>
+</div>
+
+<div id="catalogModal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2>🌐 Catálogo de servicios</h2>
+      <button id="catalogModalClose" class="modal-close" aria-label="Cerrar">×</button>
+    </div>
+    <p class="modal-hint">
+      Elegí un servicio WMS/WFS ya conocido en vez de buscar la URL a mano. Al
+      presionar "Usar servicio" se abre el formulario habitual con la URL ya
+      cargada y se buscan sus capas automáticamente — es el mismo flujo de
+      siempre, solo que con la URL puesta. Si preferís, seguís pudiendo
+      <b>ingresar una URL manualmente</b> desde "🛰️ + Capa WMS" / "🧩 + Capa WFS".
+    </p>
+    <input type="text" id="catalogSearchInput" class="modal-text-input" placeholder="Buscar servicio..." />
+
+    <span class="modal-field-label">Tipo</span>
+    <div id="catalogTypeFilter" class="catalog-chip-row">
+      <button type="button" class="secondary catalog-chip active" data-type="">Todos</button>
+      <button type="button" class="secondary catalog-chip" data-type="WMS">WMS</button>
+      <button type="button" class="secondary catalog-chip" data-type="WFS">WFS</button>
+    </div>
+
+    <span class="modal-field-label">Categorías</span>
+    <div id="catalogCategoryFilter" class="catalog-chip-row"></div>
+
+    <div id="catalogResultCount" class="catalog-result-count"></div>
+    <div id="catalogList" class="catalog-list"></div>
   </div>
 </div>
 
@@ -1293,6 +1359,57 @@ let idCounter = 0;
 const FILE_COLORS = ['#4f8cff', '#ff5f6d', '#23c98f', '#f5a623', '#b967ff', '#00d4d4', '#ff8fc9', '#a8e05f', '#ff6b3d', '#5ecbf0'];
 let loadedFiles = []; // {id, name, color, visible}
 let fileIdCounter = 0;
+
+// ---- Catálogo de servicios WMS/WFS preconfigurados ---------------------
+// Cada entrada es solo metadata + una URL — no ejecuta ningún fetch por sí
+// sola (eso sigue pasando exclusivamente por fetchWmsCapabilities/
+// fetchWfsCapabilities, disparado recién cuando el usuario elige "Usar
+// servicio"). Agregar un servicio nuevo es sumar un objeto acá, nada de
+// lógica de WMS/WFS depende de esta lista. Todas las URLs fueron probadas
+// manualmente (GetCapabilities real, HTTP 200 con datos) antes de sumarlas:
+// no se listan servicios sin verificar que respondan.
+const SERVICE_CATALOG = [
+  {
+    id: 'snaspe-wms',
+    name: 'SNASPE (WMS)',
+    organization: 'IDE Chile / CONAF',
+    category: 'Medio ambiente',
+    type: 'WMS',
+    url: 'https://geoportal.cl/geoserver/SNASPE/wms',
+    description: 'Áreas silvestres protegidas del Estado (parques, reservas y monumentos nacionales).',
+    country: 'Chile'
+  },
+  {
+    id: 'snaspe-wfs',
+    name: 'SNASPE (WFS)',
+    organization: 'IDE Chile / CONAF',
+    category: 'Medio ambiente',
+    type: 'WFS',
+    url: 'https://geoportal.cl/geoserver/SNASPE/wfs',
+    description: 'Mismos datos que el WMS de SNASPE, pero descargables como geometrías reales.',
+    country: 'Chile'
+  },
+  {
+    id: 'ide-mma-wms',
+    name: 'IDE MMA (WMS)',
+    organization: 'Ministerio del Medio Ambiente',
+    category: 'Medio ambiente',
+    type: 'WMS',
+    url: 'https://ide.mma.gob.cl/geoserver/wms',
+    description: 'Servicio WMS del Ministerio del Medio Ambiente (infraestructura GeoServer).',
+    country: 'Chile'
+  },
+  {
+    id: 'ide-mma-wfs',
+    name: 'IDE MMA (WFS)',
+    organization: 'Ministerio del Medio Ambiente',
+    category: 'Medio ambiente',
+    type: 'WFS',
+    url: 'https://ide.mma.gob.cl/geoserver/wfs',
+    description: 'Servicio WFS del Ministerio del Medio Ambiente (infraestructura GeoServer).',
+    country: 'Chile'
+  }
+];
 
 function toast(msg) {
   const t = document.getElementById('toast');
@@ -3127,6 +3244,140 @@ document.getElementById('wfsRunBtn').addEventListener('click', async () => {
   } finally {
     runBtn.disabled = false;
   }
+});
+
+// ---- Catálogo de servicios WMS/WFS preconfigurados ---------------------
+// Es solo un "picker" sobre SERVICE_CATALOG: no hace fetch por su cuenta ni
+// reimplementa nada de WMS/WFS. "Usar servicio" simplemente abre el modal
+// WMS o WFS que ya existe (mismo botón, mismo reset, mismo estado) con la
+// URL precargada y dispara el botón "Buscar capas" que ya existe — de ahí
+// en adelante es exactamente el mismo flujo de GetCapabilities/selección/
+// agregado que si el usuario hubiera pegado la URL a mano.
+const CATALOG_CATEGORY_CHIPS = [
+  { icon: '🇨🇱', label: 'Chile', field: 'country', value: 'Chile' },
+  { icon: '🌱', label: 'Medio ambiente', field: 'category', value: 'Medio ambiente' },
+  { icon: '🌾', label: 'Agricultura', field: 'category', value: 'Agricultura' },
+  { icon: '🏙️', label: 'Territorio / planificación', field: 'category', value: 'Territorio / planificación' },
+  { icon: '🌋', label: 'Geología', field: 'category', value: 'Geología' },
+  { icon: '💧', label: 'Agua', field: 'category', value: 'Agua' },
+  { icon: '🗺️', label: 'Otros', field: 'category', value: 'Otros' }
+];
+
+let catalogTypeState = '';
+let catalogCategoryState = null; // null = todas, o { field, value }
+
+function renderCatalogCategoryChips() {
+  const wrap = document.getElementById('catalogCategoryFilter');
+  const allBtn = `<button type="button" class="secondary catalog-chip${catalogCategoryState ? '' : ' active'}" data-cat="">Todas</button>`;
+  const chipBtns = CATALOG_CATEGORY_CHIPS.map(chip => {
+    const active = catalogCategoryState && catalogCategoryState.field === chip.field && catalogCategoryState.value === chip.value;
+    return `<button type="button" class="secondary catalog-chip${active ? ' active' : ''}" data-cat="${escapeHtml(chip.field)}:${escapeHtml(chip.value)}">${chip.icon} ${escapeHtml(chip.label)}</button>`;
+  }).join('');
+  wrap.innerHTML = allBtn + chipBtns;
+
+  wrap.querySelectorAll('.catalog-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cat = btn.dataset.cat;
+      if (!cat) {
+        catalogCategoryState = null;
+      } else {
+        const [field, value] = cat.split(':');
+        catalogCategoryState = { field, value };
+      }
+      renderCatalogCategoryChips();
+      renderCatalogList();
+    });
+  });
+}
+
+function renderCatalogList() {
+  const query = document.getElementById('catalogSearchInput').value.trim().toLowerCase();
+  const listEl = document.getElementById('catalogList');
+  const countEl = document.getElementById('catalogResultCount');
+
+  const filtered = SERVICE_CATALOG.filter(s => {
+    if (catalogTypeState && s.type !== catalogTypeState) return false;
+    if (catalogCategoryState && s[catalogCategoryState.field] !== catalogCategoryState.value) return false;
+    if (query) {
+      const haystack = `${s.name} ${s.organization} ${s.category} ${s.description}`.toLowerCase();
+      if (!haystack.includes(query)) return false;
+    }
+    return true;
+  });
+
+  countEl.textContent = `${filtered.length} servicio${filtered.length === 1 ? '' : 's'}`;
+
+  if (!filtered.length) {
+    listEl.innerHTML = '<div class="catalog-empty">Ningún servicio coincide con la búsqueda/filtros.</div>';
+    return;
+  }
+
+  // Todo el texto de cada tarjeta viene de SERVICE_CATALOG (datos propios,
+  // no de un servidor externo) pero igual pasa por escapeHtml() — mismo
+  // criterio que el resto del visor: nunca innerHTML crudo con texto variable.
+  listEl.innerHTML = filtered.map(s => `
+    <div class="catalog-card">
+      <div class="catalog-card-name">${escapeHtml(s.name)}</div>
+      <div class="catalog-card-org">${escapeHtml(s.organization)}</div>
+      <div class="catalog-card-badges">
+        <span class="catalog-badge catalog-badge-type">${escapeHtml(s.type)}</span>
+        <span class="catalog-badge catalog-badge-category">${escapeHtml(s.category)}</span>
+      </div>
+      <div class="catalog-card-desc">${escapeHtml(s.description)}</div>
+      <button type="button" class="modal-primary-btn catalog-use-btn" data-id="${escapeHtml(s.id)}">Usar servicio</button>
+    </div>
+  `).join('');
+
+  listEl.querySelectorAll('.catalog-use-btn').forEach(btn => {
+    btn.addEventListener('click', () => useService(btn.dataset.id));
+  });
+}
+
+// Abre el modal WMS o WFS correspondiente reusando sus propios botones —
+// document.getElementById('wmsbtn').click() ya hace todo lo que hace abrir
+// ese modal a mano (classList.add('open') + resetWmsDiscovery()), así que
+// no hay que reimplementar nada de esa lógica acá.
+function useService(id) {
+  const service = SERVICE_CATALOG.find(s => s.id === id);
+  if (!service) return;
+
+  document.getElementById('catalogModal').classList.remove('open');
+
+  if (service.type === 'WFS') {
+    document.getElementById('wfsbtn').click();
+    document.getElementById('wfsUrlInput').value = service.url;
+    document.getElementById('wfsDiscoverBtn').click();
+  } else {
+    document.getElementById('wmsbtn').click();
+    document.getElementById('wmsUrlInput').value = service.url;
+    document.getElementById('wmsDiscoverBtn').click();
+  }
+}
+
+document.getElementById('catalogbtn').addEventListener('click', () => {
+  document.getElementById('catalogModal').classList.add('open');
+  document.getElementById('catalogSearchInput').value = '';
+  catalogTypeState = '';
+  catalogCategoryState = null;
+  document.querySelectorAll('#catalogTypeFilter .catalog-chip').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.type === '');
+  });
+  renderCatalogCategoryChips();
+  renderCatalogList();
+});
+document.getElementById('catalogModalClose').addEventListener('click', () => {
+  document.getElementById('catalogModal').classList.remove('open');
+});
+document.getElementById('catalogModal').addEventListener('click', (e) => {
+  if (e.target.id === 'catalogModal') document.getElementById('catalogModal').classList.remove('open');
+});
+document.getElementById('catalogSearchInput').addEventListener('input', renderCatalogList);
+document.querySelectorAll('#catalogTypeFilter .catalog-chip').forEach(btn => {
+  btn.addEventListener('click', () => {
+    catalogTypeState = btn.dataset.type;
+    document.querySelectorAll('#catalogTypeFilter .catalog-chip').forEach(b => b.classList.toggle('active', b === btn));
+    renderCatalogList();
+  });
 });
 
 document.getElementById('styleModalClose').addEventListener('click', () => {

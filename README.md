@@ -57,6 +57,10 @@ Desde **"🛰️ + Capa WMS"**:
 
 > Requiere que el servidor WMS permita solicitudes desde el navegador (CORS). Si no lo permite, el visor lo indica con un mensaje de error al intentar buscar o cargar la capa.
 
+### Catálogo de servicios preconfigurados
+
+Desde **"🌐 Catálogo de servicios"** podés elegir un servicio WMS/WFS ya conocido en vez de buscar la URL a mano: buscador instantáneo, filtro por tipo (WMS/WFS) y por categoría (Chile, Medio ambiente, Agricultura, Territorio, Geología, Agua, Otros). Al presionar **"Usar servicio"** se abre el mismo modal de siempre (WMS o WFS) con la URL ya cargada y se ejecuta el "Buscar capas" automáticamente — es el flujo habitual de GetCapabilities, no uno nuevo. Agregar un servicio al catálogo es sumar una entrada al array `SERVICE_CATALOG` en `index.html`, sin tocar la lógica de WMS/WFS.
+
 ## Capas WFS remotas
 
 A diferencia de WMS (que trae una imagen), un servicio WFS entrega las geometrías reales. Desde **"🧩 + Capa WFS"** el flujo es el mismo que WMS —pegá la URL, "🔎 Buscar capas" vía GetCapabilities, filtrá y elegí una capa—, pero el resultado se descarga (`GetFeature`, formato GeoJSON) y se agrega **como una capa local vectorial más**: queda en el buscador, el árbol, los gráficos y con su popup de atributos, igual que un `.geojson` cargado a mano.
