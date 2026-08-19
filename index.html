@@ -652,6 +652,39 @@
   }
   .modal-text-input:focus { border-color: var(--accent); }
 
+  /* Descubrimiento de capas WMS vía GetCapabilities (Etapa 1.2) */
+  #wmsModal .modal-box { width: min(520px, 100%); }
+  .wms-url-row { display: flex; gap: 8px; align-items: stretch; }
+  .wms-url-row .modal-text-input { flex: 1; min-width: 0; }
+  .wms-discover-btn { white-space: nowrap; padding: 0 12px; font-size: 12.5px; }
+  .wms-layer-filter-wrap { margin: 10px 0 4px; }
+  .wms-layer-list {
+    margin-top: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-2);
+  }
+  .wms-layer-item {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .wms-layer-item:last-child { border-bottom: none; }
+  .wms-layer-item:hover { background: var(--panel); }
+  .wms-layer-item-title { font-size: 13px; font-weight: 600; color: var(--text); }
+  .wms-layer-item-name { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+  .wms-layer-item-abstract {
+    font-size: 11.5px;
+    color: var(--text-dim);
+    margin-top: 3px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wms-layer-empty { padding: 12px 10px; font-size: 12.5px; color: var(--text-dim); text-align: center; }
+
   #toast {
     position: fixed;
     bottom: 20px;
@@ -789,7 +822,17 @@
     <label class="modal-field-label" for="wmsNameInput">Nombre de la capa</label>
     <input type="text" id="wmsNameInput" class="modal-text-input" value="Áreas Silvestres Protegidas" />
     <label class="modal-field-label" for="wmsUrlInput">URL del servicio WMS</label>
-    <input type="text" id="wmsUrlInput" class="modal-text-input" value="https://geoportal.cl/geoserver/SNASPE/wms" />
+    <div class="wms-url-row">
+      <input type="text" id="wmsUrlInput" class="modal-text-input" value="https://geoportal.cl/geoserver/SNASPE/wms" />
+      <button id="wmsDiscoverBtn" type="button" class="secondary wms-discover-btn">🔎 Buscar capas</button>
+    </div>
+    <div id="wmsDiscoverStatus" class="modal-status"></div>
+
+    <div id="wmsLayerFilterWrap" class="wms-layer-filter-wrap" hidden>
+      <input type="text" id="wmsLayerFilterInput" class="modal-text-input" placeholder="Filtrar capas…" />
+      <div id="wmsLayerList" class="wms-layer-list"></div>
+    </div>
+
     <label class="modal-field-label" for="wmsLayerInput">Nombre de la capa WMS</label>
     <input type="text" id="wmsLayerInput" class="modal-text-input" value="SNASPE:snap" />
     <button id="wmsRunBtn" class="modal-primary-btn" style="margin-top:14px;">Agregar capa</button>
@@ -1742,6 +1785,186 @@ function addWmsLayer(name, url, wmsLayerName, opts) {
   if (file.visible) tileLayer.addTo(map);
   refreshAll();
   return file;
+}
+
+// ---- WMS GetCapabilities (Etapa 1.2) -----------------------------------
+// Helpers puros: no hacen fetch, no tocan el DOM ni loadedFiles/allItems.
+// Sirven para construir la URL de GetCapabilities y para parsear la
+// respuesta XML en una lista plana de capas solicitables.
+
+// Agrega service=WMS&request=GetCapabilities a la URL ingresada por el
+// usuario sin pisar query params que ya pudiera traer (p.ej. ?version=1.1.1
+// o credenciales en la query) y sin duplicar el "?".
+function buildGetCapabilitiesUrl(baseUrl) {
+  const url = new URL(baseUrl);
+  const hasParam = (name) => {
+    for (const key of url.searchParams.keys()) {
+      if (key.toLowerCase() === name.toLowerCase()) return true;
+    }
+    return false;
+  };
+  if (!hasParam('service')) url.searchParams.set('service', 'WMS');
+  if (!hasParam('request')) url.searchParams.set('request', 'GetCapabilities');
+  return url.toString();
+}
+
+// Extrae los datos de una capa <Layer> (WMS 1.1.1 o 1.3.0): Name/Title/
+// Abstract propios, CRS soportados (propios + heredados del padre) y
+// BoundingBox geográfico (propio o heredado si esta capa no lo redefine).
+// "inherited" es el resultado combinado de los <Layer> ancestros — en WMS
+// un <Layer> hijo hereda CRS y BoundingBox del padre cuando no los redefine.
+function extractLayerInfo(layerEl, version, inherited) {
+  inherited = inherited || { crsList: [], bbox: null };
+
+  const getChildText = (tag) => {
+    const el = layerEl.querySelector(':scope > ' + tag);
+    return el ? el.textContent.trim() : '';
+  };
+
+  const name = getChildText('Name') || null;
+  const title = getChildText('Title');
+  const abstractText = getChildText('Abstract');
+
+  // WMS 1.3.0 usa <CRS>, WMS 1.1.1 usa <SRS> — mismo propósito.
+  const ownCrs = Array.from(layerEl.querySelectorAll(':scope > CRS, :scope > SRS'))
+    .map(el => el.textContent.trim())
+    .filter(Boolean);
+  const crsList = Array.from(new Set([...ownCrs, ...inherited.crsList]));
+
+  let bbox = null;
+  // WMS 1.3.0: <EX_GeographicBoundingBox> con hijos con nombre (sin ambigüedad de orden de ejes).
+  const geoBboxEl = layerEl.querySelector(':scope > EX_GeographicBoundingBox');
+  if (geoBboxEl) {
+    const west = parseFloat(geoBboxEl.querySelector('westBoundLongitude')?.textContent);
+    const east = parseFloat(geoBboxEl.querySelector('eastBoundLongitude')?.textContent);
+    const south = parseFloat(geoBboxEl.querySelector('southBoundLatitude')?.textContent);
+    const north = parseFloat(geoBboxEl.querySelector('northBoundLatitude')?.textContent);
+    if ([west, east, south, north].every(Number.isFinite)) {
+      bbox = { west, east, south, north };
+    }
+  }
+  // WMS 1.1.1: <LatLonBoundingBox minx miny maxx maxy> (siempre lon/lat, sin ambigüedad).
+  if (!bbox) {
+    const latLonEl = layerEl.querySelector(':scope > LatLonBoundingBox');
+    if (latLonEl) {
+      const west = parseFloat(latLonEl.getAttribute('minx'));
+      const south = parseFloat(latLonEl.getAttribute('miny'));
+      const east = parseFloat(latLonEl.getAttribute('maxx'));
+      const north = parseFloat(latLonEl.getAttribute('maxy'));
+      if ([west, east, south, north].every(Number.isFinite)) {
+        bbox = { west, east, south, north };
+      }
+    }
+  }
+  if (!bbox) bbox = inherited.bbox;
+
+  const styles = Array.from(layerEl.querySelectorAll(':scope > Style')).map(styleEl => {
+    const styleNameEl = styleEl.querySelector(':scope > Name');
+    const styleTitleEl = styleEl.querySelector(':scope > Title');
+    return {
+      name: styleNameEl ? styleNameEl.textContent.trim() : '',
+      title: styleTitleEl ? styleTitleEl.textContent.trim() : ''
+    };
+  });
+
+  return {
+    name,
+    title: title || name || '',
+    abstract: abstractText,
+    crsList,
+    bbox,
+    styles,
+    queryable: layerEl.getAttribute('queryable') === '1',
+    version
+  };
+}
+
+// Recorre <Layer> anidados recursivamente (un WMS puede anidar contenedores
+// puramente organizativos sin <Name> propio, que no son solicitables). Solo
+// se agregan al resultado las capas con <Name> propio; los contenedores sin
+// nombre solo sirven para propagar CRS/BoundingBox heredados a sus hijos.
+function flattenWmsLayers(layerEl, inherited, version, out) {
+  out = out || [];
+  inherited = inherited || { crsList: [], bbox: null };
+
+  const info = extractLayerInfo(layerEl, version, inherited);
+
+  if (info.name) {
+    out.push(info);
+  }
+
+  const childInherited = { crsList: info.crsList, bbox: info.bbox };
+  const childLayers = Array.from(layerEl.children).filter(el => el.tagName === 'Layer');
+  childLayers.forEach(child => flattenWmsLayers(child, childInherited, version, out));
+
+  return out;
+}
+
+// Parsea el XML de GetCapabilities completo (reutilizando el mismo patrón
+// de DOMParser que parseKml) y devuelve { version, layers }. Lanza Error
+// con un mensaje entendible ante XML inválido o ServiceException del WMS —
+// a diferencia de parseKml, acá sí se valida <parsererror> explícitamente
+// porque DOMParser no lanza excepciones de JS ante XML malformado.
+function parseWmsCapabilities(xmlText) {
+  const parser = new DOMParser();
+  const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+
+  if (xmlDoc.querySelector('parsererror')) {
+    throw new Error('El servidor no devolvió un XML válido de GetCapabilities.');
+  }
+
+  const exceptionEl = xmlDoc.querySelector('ServiceException');
+  if (exceptionEl) {
+    const msg = exceptionEl.textContent.trim();
+    throw new Error(msg ? `El servicio WMS devolvió un error: ${msg}` : 'El servicio WMS devolvió un error (ServiceException).');
+  }
+
+  const root = xmlDoc.documentElement;
+  if (!root || !/Capabilities$/i.test(root.nodeName)) {
+    throw new Error('La respuesta no parece ser un GetCapabilities de WMS.');
+  }
+
+  const version = root.getAttribute('version') || '1.1.1';
+
+  const capabilityEl = root.querySelector(':scope > Capability');
+  const rootLayers = capabilityEl ? Array.from(capabilityEl.querySelectorAll(':scope > Layer')) : [];
+
+  const layers = [];
+  rootLayers.forEach(layerEl => flattenWmsLayers(layerEl, null, version, layers));
+
+  return { version, layers };
+}
+
+// Descarga y parsea el GetCapabilities de un servicio WMS a partir de su URL
+// base. Único punto que hace fetch — se llama solo bajo demanda (botón
+// "Buscar capas", a agregar en un commit posterior), nunca automáticamente.
+// Lanza Error con mensajes distintos para cada causa de falla, ya que
+// fetch() no permite distinguir CORS de "servidor caído" de "URL inválida"
+// más que por el tipo de excepción que produce.
+async function fetchWmsCapabilities(baseUrl) {
+  let capUrl;
+  try {
+    capUrl = buildGetCapabilitiesUrl(baseUrl);
+  } catch (e) {
+    throw new Error('La URL del servicio WMS no es válida.');
+  }
+
+  let response;
+  try {
+    response = await fetch(capUrl);
+  } catch (e) {
+    // fetch() rechaza con un TypeError genérico ("Failed to fetch") tanto
+    // si el servidor no responde como si bloquea la petición por CORS —
+    // el navegador no expone cuál de las dos causas fue.
+    throw new Error('No se pudo conectar con el servicio WMS — revisá la URL, tu conexión a internet, o que el servidor permita solicitudes desde el navegador (CORS).');
+  }
+
+  if (!response.ok) {
+    throw new Error(`El servicio WMS respondió con error HTTP ${response.status}${response.statusText ? ' ' + response.statusText : ''}.`);
+  }
+
+  const xmlText = await response.text();
+  return parseWmsCapabilities(xmlText);
 }
 
 async function addKmzFile(arrayBuffer, filename) {
