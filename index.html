@@ -1449,6 +1449,189 @@ const SERVICE_CATALOG = [
     description: 'Mismos datos de cuencas hidrográficas, descargables como geometrías reales.',
     country: 'Chile',
     coverage: 'Nacional'
+  },
+  // Los siguientes 16 (8 workspaces × WMS+WFS) están todos en el mismo
+  // GeoServer de geoportal.cl que ya usan SNASPE/DGA — se investigaron
+  // muchos otros organismos (Energía, SAG, SUBPESCA, MOP, Bienes
+  // Nacionales, MINVU, CIREN/MINAGRI: todos con endpoints reales y
+  // funcionando) pero SUS servidores ArcGIS/IIS no mandan el header
+  // Access-Control-Allow-Origin, así que el navegador los bloquea por
+  // CORS — quedan fuera del catálogo (ver commit para el detalle).
+  {
+    id: 'gp-municipios-wms',
+    name: 'Municipios (WMS)',
+    organization: 'IDE Chile',
+    category: 'Territorio / planificación',
+    type: 'WMS',
+    url: 'https://geoportal.cl/geoserver/Municipios/wms',
+    description: 'Ubicación de municipalidades de Chile.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-municipios-wfs',
+    name: 'Municipios (WFS)',
+    organization: 'IDE Chile',
+    category: 'Territorio / planificación',
+    type: 'WFS',
+    url: 'https://geoportal.cl/geoserver/Municipios/wfs',
+    description: 'Mismos datos de municipalidades, descargables como geometrías reales.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-capitales-wms',
+    name: 'Capitales regionales (WMS)',
+    organization: 'IDE Chile',
+    category: 'Cartografía base',
+    type: 'WMS',
+    url: 'https://geoportal.cl/geoserver/Capitales/wms',
+    description: 'Ubicación de las capitales regionales de Chile.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-capitales-wfs',
+    name: 'Capitales regionales (WFS)',
+    organization: 'IDE Chile',
+    category: 'Cartografía base',
+    type: 'WFS',
+    url: 'https://geoportal.cl/geoserver/Capitales/wfs',
+    description: 'Mismos datos de capitales regionales, descargables como geometrías reales.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-hidrografia-wms',
+    name: 'Hidrografía (WMS)',
+    organization: 'IDE Chile',
+    category: 'Hidrología',
+    type: 'WMS',
+    url: 'https://geoportal.cl/geoserver/Hidrografia/wms',
+    description: 'Red hidrográfica (ríos y cursos de agua).',
+    country: 'Chile',
+    coverage: 'Regional (Arica a O\'Higgins)'
+  },
+  {
+    id: 'gp-hidrografia-wfs',
+    name: 'Hidrografía (WFS)',
+    organization: 'IDE Chile',
+    category: 'Hidrología',
+    type: 'WFS',
+    url: 'https://geoportal.cl/geoserver/Hidrografia/wfs',
+    description: 'Mismos datos de hidrografía, descargables como geometrías reales.',
+    country: 'Chile',
+    coverage: 'Regional (Arica a O\'Higgins)'
+  },
+  {
+    id: 'gp-glaciares-wms',
+    name: 'Glaciares de Chile (WMS)',
+    organization: 'IDE Chile',
+    category: 'Agua',
+    type: 'WMS',
+    url: 'https://geoportal.cl/geoserver/Glaciares/wms',
+    description: 'Inventario de glaciares del territorio chileno.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-glaciares-wfs',
+    name: 'Glaciares de Chile (WFS)',
+    organization: 'IDE Chile',
+    category: 'Agua',
+    type: 'WFS',
+    url: 'https://geoportal.cl/geoserver/Glaciares/wfs',
+    description: 'Mismos datos de glaciares, descargables como geometrías reales.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-salud-wms',
+    name: 'Establecimientos de Salud (WMS)',
+    organization: 'IDE Chile',
+    category: 'Otros',
+    type: 'WMS',
+    url: 'https://geoportal.cl/geoserver/Establecimientos_Salud/wms',
+    description: 'Ubicación de establecimientos de salud a nivel nacional.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-salud-wfs',
+    name: 'Establecimientos de Salud (WFS)',
+    organization: 'IDE Chile',
+    category: 'Otros',
+    type: 'WFS',
+    url: 'https://geoportal.cl/geoserver/Establecimientos_Salud/wfs',
+    description: 'Mismos datos de establecimientos de salud, descargables como geometrías reales.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-salud-2025-wms',
+    name: 'Establecimientos de Salud Diciembre 2025 (WMS)',
+    organization: 'IDE Chile',
+    category: 'Otros',
+    type: 'WMS',
+    url: 'https://geoportal.cl/geoserver/EstablecimientosdesaluddeChile2025/wms',
+    description: 'Actualización de diciembre 2025 del catastro de establecimientos de salud.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-salud-2025-wfs',
+    name: 'Establecimientos de Salud Diciembre 2025 (WFS)',
+    organization: 'IDE Chile',
+    category: 'Otros',
+    type: 'WFS',
+    url: 'https://geoportal.cl/geoserver/EstablecimientosdesaluddeChile2025/wfs',
+    description: 'Mismos datos (diciembre 2025), descargables como geometrías reales.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-destinos-turisticos-wms',
+    name: 'Destinos Turísticos 2024 (WMS)',
+    organization: 'IDE Chile',
+    category: 'Otros',
+    type: 'WMS',
+    url: 'https://geoportal.cl/geoserver/Destinos_Turisticos/wms',
+    description: 'Destinos turísticos catastrados a nivel nacional (2024).',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-destinos-turisticos-wfs',
+    name: 'Destinos Turísticos 2024 (WFS)',
+    organization: 'IDE Chile',
+    category: 'Otros',
+    type: 'WFS',
+    url: 'https://geoportal.cl/geoserver/Destinos_Turisticos/wfs',
+    description: 'Mismos datos de destinos turísticos, descargables como geometrías reales.',
+    country: 'Chile',
+    coverage: 'Nacional'
+  },
+  {
+    id: 'gp-atropellos-2015-wms',
+    name: 'Atropellos año 2015 (WMS)',
+    organization: 'IDE Chile',
+    category: 'Transporte',
+    type: 'WMS',
+    url: 'https://geoportal.cl/geoserver/Atropellos_2015/wms',
+    description: 'Siniestros con atropello registrados durante 2015 (Región Metropolitana).',
+    country: 'Chile',
+    coverage: 'Regional (Metropolitana)'
+  },
+  {
+    id: 'gp-atropellos-2015-wfs',
+    name: 'Atropellos año 2015 (WFS)',
+    organization: 'IDE Chile',
+    category: 'Transporte',
+    type: 'WFS',
+    url: 'https://geoportal.cl/geoserver/Atropellos_2015/wfs',
+    description: 'Mismos datos de atropellos 2015, descargables como geometrías reales.',
+    country: 'Chile',
+    coverage: 'Regional (Metropolitana)'
   }
 ];
 
@@ -3301,6 +3484,9 @@ const CATALOG_CATEGORY_CHIPS = [
   { icon: '🏙️', label: 'Territorio / planificación', field: 'category', value: 'Territorio / planificación' },
   { icon: '🌋', label: 'Geología', field: 'category', value: 'Geología' },
   { icon: '💧', label: 'Agua', field: 'category', value: 'Agua' },
+  { icon: '🌊', label: 'Hidrología', field: 'category', value: 'Hidrología' },
+  { icon: '🚗', label: 'Transporte', field: 'category', value: 'Transporte' },
+  { icon: '🧭', label: 'Cartografía base', field: 'category', value: 'Cartografía base' },
   { icon: '🗺️', label: 'Otros', field: 'category', value: 'Otros' }
 ];
 
