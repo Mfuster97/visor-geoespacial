@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Visor Geoespacial: a geospatial viewer for exploring/comparing project boundaries (originally electrical line projects vs. nearby SEA — Chilean environmental impact assessment — projects) on a satellite map. It is a **single self-contained static HTML file** (`index.html`, ~3000 lines: CSS + JS inline) with **no backend, no build system, no package manager, no bundler**. It's opened directly in a browser (double-click) or via any static file server.
 
-Besides local vector formats, it can also add **remote WMS layers** (via URL + layer name) as an overlay alongside locally loaded files — see `addWmsLayer` in Architecture below.
+Besides local vector formats, it can also add **remote WMS layers** (via URL + layer name, either typed manually or discovered via `GetCapabilities`) as an overlay alongside locally loaded files — see `addWmsLayer`/WMS GetCapabilities in Architecture below.
 
 All third-party libraries (Leaflet, JSZip, shpjs, shp-write) are loaded from the `unpkg.com` CDN via `<script>` tags at the top of `index.html` — there is nothing to `npm install`.
 
@@ -41,6 +41,7 @@ Everything lives in `index.html`, structured top to bottom as:
    - Format converters: `kmlToGeoJSON`, `geoJsonToKml`, `sanitizeFeaturesForShapefile`/`sanitizeFieldName` (DBF field-name/encoding constraints for Shapefile export, Esri-compatible), used by the KML⇄Shapefile converter modal.
    - Attribute/status classification: `findEstadoInProps`/`classifyEstado` (SEA project status: Aprobado/En calificación/Rechazado/Desistido-Caducado) and `findRegionInProps`/`normalizeRegion` (Chilean region name normalization) — both used for auto-coloring and the sidebar charts (`renderStatusChart`, `renderRegionChart`).
    - Layer/file management: `registerFile`/`loadedFiles` (one entry per loaded file or WMS layer) vs. `allItems` (one entry per individual feature/placemark across all files) — most rendering code iterates `allItems` filtered by `fileId`. WMS layers (`addWmsLayer`) share the `loadedFiles` array (`kind: 'wms'`) but intentionally have no `allItems` entries since they're server-rendered tile images, not vector features.
+   - **WMS GetCapabilities discovery** (pure helpers, no fetch/DOM): `buildGetCapabilitiesUrl` (adds `service`/`request` query params without clobbering existing ones), `parseWmsCapabilities` (DOMParser, same pattern as `parseKml`; detects WMS 1.1.1 vs 1.3.0 from the root element's `version` attribute, validates `<parsererror>` and `<ServiceException>`), `flattenWmsLayers`/`extractLayerInfo` (recursively walk nested `<Layer>` containers, only layers with their own `<Name>` are requestable; CRS and BoundingBox are inherited from ancestor `<Layer>` elements when not redefined — WMS 1.3.0 uses `<CRS>`/`<EX_GeographicBoundingBox>`, 1.1.1 uses `<SRS>`/`<LatLonBoundingBox>`). `fetchWmsCapabilities` is the only function that actually calls `fetch()`, and only runs on demand (the "🔎 Buscar capas" button in the WMS modal) — never automatically. `renderWmsLayerList` paints the (client-side-filtered, capped at 200) results into the modal, escaping all server-provided text with `escapeHtml`. `selectWmsLayer` autofills the manual name/layer inputs from a clicked result and stores its BoundingBox in `pendingWmsBounds`, which `addWmsLayer`'s optional `opts.bounds` then uses for a `map.fitBounds()` after adding the layer.
    - UI rendering: `renderLayersPanel`, `renderTree`, `renderStats`, `focusItem`, search (`renderSearchResults`, `runPlaceSearch`).
    - Grid overlays (`drawLatLngGrid`, `drawUtmGrid`) and coordinate conversion (`latLngToUtm`/`utmToLatLng`, `parseUtmPair`, `parseCoordinatePair`).
    - **Export ("Guardar y compartir")**: `exportViewer` clones `ORIGINAL_HTML` (a snapshot of the page's *original* `outerHTML` taken before any DOM mutations, captured at the very top of the script) and re-embeds the currently loaded layers' data plus their current color/visibility/type state, producing a new fully self-contained `index.html`-like file with no external file dependencies beyond the same CDN scripts.
@@ -50,7 +51,7 @@ Everything lives in `index.html`, structured top to bottom as:
 
 - `loadedFiles`: array of `{ id, name, color, visible, type ('propio'|'sea'), kind ('vector'|'wms'), ... }` — one per loaded file/layer, drives the layers panel.
 - `allItems`: array of `{ id, name, folder, type, layer, fileId, fileColor, estado }` — one per individual geometry/placemark, drives the tree view, search, charts, and stats. Always cross-referenced by `fileId` back to `loadedFiles`.
-- Security note: KML/GeoJSON descriptions/attributes are attacker-controllable content (arbitrary user-supplied files) rendered into popups — `sanitizeHtmlContent`/`escapeHtml` exist specifically to prevent XSS from malicious KML descriptions; don't bypass them when touching popup/description rendering.
+- Security note: KML/GeoJSON descriptions/attributes are attacker-controllable content (arbitrary user-supplied files) rendered into popups — `sanitizeHtmlContent`/`escapeHtml` exist specifically to prevent XSS from malicious KML descriptions; don't bypass them when touching popup/description rendering. The same applies to WMS `GetCapabilities` responses (layer name/title/abstract come from a remote server the user points at) — `renderWmsLayerList` always routes that text through `escapeHtml`.
 
 ### Supported formats
 
@@ -60,8 +61,7 @@ KMZ, KML, Shapefile (`.shp`+`.dbf`+`.prj`, loose or zipped, with reprojection if
 
 Directions being considered for future work (not yet implemented unless noted elsewhere in this file):
 
-- WMS improvements (already have basic remote WMS layer support — see Architecture)
-- WMS `GetCapabilities` discovery (list available layers from a server URL instead of typing the layer name manually)
+- WMS: manual layer entry and `GetCapabilities`-based discovery (with filtering and auto-`fitBounds`) are both implemented — see Architecture.
 - WFS support
 - Sentinel/Landsat imagery integration
 - Python/FastAPI backend (optional, for features that outgrow a client-only architecture)

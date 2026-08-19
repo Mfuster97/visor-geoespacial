@@ -19,6 +19,7 @@ Visor geoespacial de escritorio/navegador para explorar y comparar proyectos sob
   - Cálculo de área geodésica al marcar 3 o más puntos.
 - **Diseño responsive**: panel lateral tipo *drawer* en celular/tablet, header adaptable, popups que no desbordan en pantallas chicas.
 - **Guardar y compartir**: exporta un nuevo archivo `.html` autocontenido con las capas actualmente cargadas ya embebidas (colores, tipo, visibilidad), listo para mandar a un cliente sin depender de ningún otro archivo.
+- **Capas WMS remotas**: agregá una capa de cualquier servicio WMS (OGC) por URL, con descubrimiento automático de capas disponibles vía GetCapabilities — ver detalle abajo.
 
 ## Tecnologías utilizadas
 
@@ -40,6 +41,20 @@ No hay framework ni build system — es JavaScript vanilla en un único archivo 
 | `.shp` + `.dbf` + `.prj` (sueltos o en `.zip`) | ✅ Completo, con reproyección automática si hay `.prj` |
 | `.geojson` / `.json` | ✅ Completo |
 | Geodatabase (`.gdb`) | ❌ No soportado — es un formato binario propietario de Esri y en realidad una carpeta, no un archivo. Exportalo a Shapefile o KMZ desde ArcGIS/QGIS antes de cargarlo. |
+
+## Capas WMS remotas
+
+Además de tus archivos locales, podés superponer capas de cualquier servicio WMS (OGC) público — por ejemplo, capas de IDE Chile, geoportales institucionales u otros servidores GeoServer/MapServer.
+
+Desde **"🛰️ + Capa WMS"**:
+
+- **Alta manual**: pegá la URL del servicio, el nombre de la capa WMS (el `Name` tal como lo espera el servidor, ej. `SNASPE:snap`) y un nombre para mostrar, y agregala directo.
+- **Descubrimiento automático (GetCapabilities)**: pegá solo la URL base del servicio y presioná **"🔎 Buscar capas"**. El visor consulta `GetCapabilities` (soporta WMS 1.1.1 y 1.3.0, incluida la jerarquía de capas anidadas típica de GeoServer) y muestra la lista de capas disponibles con su nombre, título y descripción.
+  - **Filtro en vivo**: escribí en "Filtrar capas…" para buscar por nombre/título/descripción entre los resultados, sin volver a consultar el servidor. Si un servicio devuelve muchas capas, se muestran hasta 200 a la vez.
+  - **Selección con un clic**: al elegir una capa de la lista, se autocompletan los campos de nombre y capa WMS (podés seguir editándolos a mano si querés). Si el servicio informa el área geográfica de la capa (BoundingBox), el mapa hace zoom automático a esa zona al agregarla.
+- Las capas WMS son independientes de tus archivos locales: podés mostrarlas, ocultarlas o quitarlas desde el panel de capas igual que cualquier otra.
+
+> Requiere que el servidor WMS permita solicitudes desde el navegador (CORS). Si no lo permite, el visor lo indica con un mensaje de error al intentar buscar o cargar la capa.
 
 ## Instalación y uso
 
@@ -74,4 +89,4 @@ Un visor exportado con "Guardar y compartir" es otro `index.html` autocontenido 
 
 ## Seguridad
 
-No usa credenciales, API keys ni backend. Los únicos servicios externos son CDN públicos (`unpkg.com`) y tiles públicos de Esri, ambos sin autenticación.
+No usa credenciales, API keys ni backend. Los servicios externos son CDN públicos (`unpkg.com`), tiles públicos de Esri, y —si el usuario decide agregar una capa WMS— el servidor WMS que indique (por URL, incluyendo la consulta de `GetCapabilities`); ninguno requiere autenticación desde el visor. El texto que devuelve un servicio WMS (nombres, títulos, descripciones de capas) se muestra siempre escapado, nunca insertado como HTML sin sanear.
