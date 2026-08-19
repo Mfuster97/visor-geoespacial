@@ -20,6 +20,7 @@ Visor geoespacial de escritorio/navegador para explorar y comparar proyectos sob
 - **Diseño responsive**: panel lateral tipo *drawer* en celular/tablet, header adaptable, popups que no desbordan en pantallas chicas.
 - **Guardar y compartir**: exporta un nuevo archivo `.html` autocontenido con las capas actualmente cargadas ya embebidas (colores, tipo, visibilidad), listo para mandar a un cliente sin depender de ningún otro archivo.
 - **Capas WMS remotas**: agregá una capa de cualquier servicio WMS (OGC) por URL, con descubrimiento automático de capas disponibles vía GetCapabilities — ver detalle abajo.
+- **Capas WFS remotas**: descargá los elementos de un servicio WFS (OGC) y agregalos como una capa local más (buscable, con popup y en los gráficos), con el mismo descubrimiento por GetCapabilities — ver detalle abajo.
 
 ## Tecnologías utilizadas
 
@@ -56,6 +57,17 @@ Desde **"🛰️ + Capa WMS"**:
 
 > Requiere que el servidor WMS permita solicitudes desde el navegador (CORS). Si no lo permite, el visor lo indica con un mensaje de error al intentar buscar o cargar la capa.
 
+## Capas WFS remotas
+
+A diferencia de WMS (que trae una imagen), un servicio WFS entrega las geometrías reales. Desde **"🧩 + Capa WFS"** el flujo es el mismo que WMS —pegá la URL, "🔎 Buscar capas" vía GetCapabilities, filtrá y elegí una capa—, pero el resultado se descarga (`GetFeature`, formato GeoJSON) y se agrega **como una capa local vectorial más**: queda en el buscador, el árbol, los gráficos y con su popup de atributos, igual que un `.geojson` cargado a mano.
+
+- **Selección con un clic**: al elegir una capa de la lista, el mapa salta de inmediato a su área (BoundingBox) — a diferencia de WMS, acá conviene hacerlo *antes* de descargar, porque la vista actual del mapa es justamente el filtro que se usa para pedir los datos.
+- **Solo se descarga la vista actual**: la descarga usa el BBOX visible del mapa en ese momento y un límite de hasta 500 elementos por vez, para no traer un dataset completo de golpe. Si necesitás otra zona, navegá el mapa y volvé a presionar "Cargar capa".
+- **Protección ante descargas pesadas**: si una capa tiene geometrías muy detalladas (polígonos grandes y complejos), la descarga se corta a los 20 segundos con un aviso para acercar el zoom — el límite de elementos por sí solo no garantiza un tamaño de descarga chico cuando hay pocos elementos pero muy grandes.
+- Una vez cargada, la capa WFS es un archivo local más: se puede ocultar, quitar o incluir en "Guardar y compartir" igual que cualquier KML/Shapefile/GeoJSON.
+
+> Igual que WMS, requiere que el servidor permita solicitudes desde el navegador (CORS).
+
 ## Instalación y uso
 
 No requiere instalación. Es un único archivo HTML:
@@ -89,4 +101,4 @@ Un visor exportado con "Guardar y compartir" es otro `index.html` autocontenido 
 
 ## Seguridad
 
-No usa credenciales, API keys ni backend. Los servicios externos son CDN públicos (`unpkg.com`), tiles públicos de Esri, y —si el usuario decide agregar una capa WMS— el servidor WMS que indique (por URL, incluyendo la consulta de `GetCapabilities`); ninguno requiere autenticación desde el visor. El texto que devuelve un servicio WMS (nombres, títulos, descripciones de capas) se muestra siempre escapado, nunca insertado como HTML sin sanear.
+No usa credenciales, API keys ni backend. Los servicios externos son CDN públicos (`unpkg.com`), tiles públicos de Esri, y —si el usuario decide agregar una capa WMS o WFS— el servidor que indique (por URL, incluyendo las consultas de `GetCapabilities`/`GetFeature`); ninguno requiere autenticación desde el visor. El texto que devuelven estos servicios (nombres, títulos, descripciones de capas) se muestra siempre escapado, nunca insertado como HTML sin sanear.

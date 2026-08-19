@@ -855,7 +855,9 @@
       Descargá los elementos (vectores) de un servicio WFS (OGC) y agregalos como una
       capa local más — quedan disponibles en el buscador, el árbol y los gráficos,
       igual que un KML o GeoJSON cargado a mano. Solo se descarga lo que ves en el
-      mapa: navegá/alejá el zoom antes de cargar para cubrir otra zona.
+      mapa: navegá/alejá el zoom antes de cargar para cubrir otra zona. Se piden
+      hasta 500 elementos por vez; si la capa tiene geometrías muy detalladas,
+      acercá el zoom para reducir el área y evitar una descarga muy pesada.
     </p>
     <label class="modal-field-label" for="wfsNameInput">Nombre de la capa</label>
     <input type="text" id="wfsNameInput" class="modal-text-input" value="SNAP (WFS)" />
@@ -2095,9 +2097,17 @@ function selectWmsLayer(layer) {
 // paralelo, la capa queda como cualquier otra vectorial (kind:'vector',
 // con entradas propias en allItems, buscable/filtrable/exportable igual).
 
-// Cuántos features se piden como máximo por capa — evita que un dataset
-// grande (miles de polígonos detallados) cuelgue el navegador al renderizar.
-const WFS_FEATURE_LIMIT = 2000;
+// Cuántos features se piden como máximo por capa (count/maxFeatures).
+// OJO: esto NO acota el tamaño de la descarga — un dataset con pocos
+// features pero geometrías muy detalladas (ver WFS_FETCH_TIMEOUT_MS) puede
+// seguir siendo enorme. Verificado con SNASPE:snap real: 107 features en
+// total, ~320MB si se piden todos de una — bajamos el default a un valor
+// conservador para el caso típico (capas con muchos features simples).
+const WFS_FEATURE_LIMIT = 500;
+
+// Corta la descarga si tarda más de esto — la única defensa que sí protege
+// contra el caso "pocos features pero gigantes" (count no alcanza ahí).
+const WFS_FETCH_TIMEOUT_MS = 20000;
 
 // Busca el primer elemento con ese localName sin importar su prefijo de
 // namespace (WFS usa profusamente ows:/fes:, a diferencia de los <Layer>
@@ -2241,17 +2251,33 @@ function buildGetFeatureUrl(baseUrl, typeName, opts) {
 // Descarga los features de una capa WFS como GeoJSON. Si el servidor
 // responde con error (HTTP != 200), intenta extraer el mensaje legible del
 // <ows:ExceptionReport>/<ServiceException> en vez de mostrar solo el status.
+// Corta la descarga a los WFS_FETCH_TIMEOUT_MS (ver comentario junto a esa
+// constante): count/maxFeatures no basta para acotar el tamaño cuando el
+// dataset tiene pocos features pero geometrías enormes (caso real medido
+// con SNASPE:snap sin bbox: ~320MB) — esta es la protección que sí funciona
+// en ese caso, cortando la conexión en vez de colgar la pestaña.
 async function fetchWfsFeatures(baseUrl, typeName, opts) {
   const url = buildGetFeatureUrl(baseUrl, typeName, opts);
 
-  let response;
-  try {
-    response = await fetch(url);
-  } catch (e) {
-    throw new Error('No se pudo conectar con el servicio WFS — revisá la URL, tu conexión a internet, o que el servidor permita solicitudes desde el navegador (CORS).');
-  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), WFS_FETCH_TIMEOUT_MS);
 
-  const bodyText = await response.text();
+  // fetch() resuelve apenas llegan los headers — el cuerpo (donde está el
+  // peso real, ver comentario arriba) recién se descarga en response.text().
+  // El watchdog tiene que seguir activo durante esa lectura, no solo durante
+  // el fetch() inicial, o nunca cortaría una descarga de cuerpo gigante.
+  let response, bodyText;
+  try {
+    response = await fetch(url, { signal: controller.signal });
+    bodyText = await response.text();
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      throw new Error(`La descarga superó ${Math.round(WFS_FETCH_TIMEOUT_MS / 1000)}s sin terminar — la capa puede tener geometrías muy grandes para el área pedida. Probá acercar el zoom antes de cargar.`);
+    }
+    throw new Error('No se pudo conectar con el servicio WFS — revisá la URL, tu conexión a internet, o que el servidor permita solicitudes desde el navegador (CORS).');
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     const parser = new DOMParser();
