@@ -297,6 +297,7 @@
   }
   .layer-row .ltype-sea { background: rgba(79, 140, 255, 0.2); color: #8fb4ff; }
   .layer-row .ltype-propio { background: rgba(255, 255, 255, 0.1); color: var(--text-dim); }
+  .layer-row .ltype-wms { background: rgba(35, 201, 143, 0.2); color: #6fe3b9; cursor: default; }
   .layer-row .lremove {
     background: none;
     border: none;
@@ -630,6 +631,26 @@
   }
   .modal-primary-btn:hover { background: #3d7ae0; }
   .modal-status { margin-top: 10px; font-size: 12.5px; color: var(--text-dim); min-height: 16px; }
+  .modal-field-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin: 10px 0 4px;
+  }
+  .modal-text-input {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+  }
+  .modal-text-input:focus { border-color: var(--accent); }
 
   #toast {
     position: fixed;
@@ -732,6 +753,7 @@
   <button id="clearbtn" class="secondary">Limpiar todo</button>
   <button id="exportbtn" class="secondary">💾 Guardar y compartir</button>
   <button id="convertbtn" class="secondary">🔄 Convertir SHP⇄KMZ</button>
+  <button id="wmsbtn" class="secondary">🛰️ + Capa WMS</button>
   <button id="filebtn">Agregar capa</button>
   <input type="file" id="fileinput" accept=".kmz,.kml,.zip,.shp,.dbf,.shx,.prj,.geojson,.json" multiple />
 </header>
@@ -750,6 +772,28 @@
     <input type="file" id="convertFileInput" accept=".kmz,.kml,.zip,.shp,.dbf,.shx,.prj,.geojson,.json" multiple />
     <button id="convertRunBtn" class="modal-primary-btn">Convertir y descargar</button>
     <div id="convertStatus" class="modal-status"></div>
+  </div>
+</div>
+
+<div id="wmsModal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h2>🛰️ Agregar capa WMS</h2>
+      <button id="wmsModalClose" class="modal-close" aria-label="Cerrar">×</button>
+    </div>
+    <p class="modal-hint">
+      Conectá una capa remota de un servicio WMS (OGC). Se agrega como una capa más,
+      independiente de tus archivos locales — podés mostrarla, ocultarla o quitarla
+      en cualquier momento. Los valores de ejemplo son un servicio real de IDE Chile.
+    </p>
+    <label class="modal-field-label" for="wmsNameInput">Nombre de la capa</label>
+    <input type="text" id="wmsNameInput" class="modal-text-input" value="Áreas Silvestres Protegidas" />
+    <label class="modal-field-label" for="wmsUrlInput">URL del servicio WMS</label>
+    <input type="text" id="wmsUrlInput" class="modal-text-input" value="https://geoportal.cl/geoserver/SNASPE/wms" />
+    <label class="modal-field-label" for="wmsLayerInput">Nombre de la capa WMS</label>
+    <input type="text" id="wmsLayerInput" class="modal-text-input" value="SNASPE:snap" />
+    <button id="wmsRunBtn" class="modal-primary-btn" style="margin-top:14px;">Agregar capa</button>
+    <div id="wmsStatus" class="modal-status"></div>
   </div>
 </div>
 
@@ -1292,7 +1336,8 @@ function parseKml(kmlText, fileId, fileColor) {
     }
 
     if (layer) {
-      const popupContent = `<div class="popup-title">${escapeHtml(name)}</div>${desc ? `<div class="popup-desc">${desc}</div>` : ''}`;
+      const safeDesc = sanitizeHtmlContent(desc);
+      const popupContent = `<div class="popup-title">${escapeHtml(name)}</div>${safeDesc ? `<div class="popup-desc">${safeDesc}</div>` : ''}`;
       layer.bindPopup(popupContent, { maxWidth: 320 });
       allItems.push({
         id: idCounter++,
@@ -1599,13 +1644,103 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Saneo de la descripción HTML del KML antes de insertarla en un popup.
+// El KML legítimo (tablas de atributos) queda intacto; se quitan únicamente
+// los vectores de XSS: <script>/<iframe>/etc., atributos on* (onerror,
+// onclick...) y URLs javascript:/data:text-html en href/src. No es un
+// sanitizador general de HTML — es intencionalmente chico y acotado a este
+// caso (KML de fuente no confiable con HTML/JS embebido en su description).
+function sanitizeHtmlContent(html) {
+  if (!html) return '';
+  const container = document.createElement('div');
+  container.innerHTML = html;
+
+  container.querySelectorAll('script, style, iframe, object, embed, link, meta, form').forEach(el => el.remove());
+
+  container.querySelectorAll('*').forEach(el => {
+    Array.from(el.attributes).forEach(attr => {
+      const attrName = attr.name.toLowerCase();
+      if (attrName.startsWith('on')) {
+        el.removeAttribute(attr.name);
+        return;
+      }
+      if (attrName === 'href' || attrName === 'src' || attrName === 'xlink:href') {
+        const val = attr.value.trim().toLowerCase();
+        if (val.startsWith('javascript:') || val.startsWith('data:text/html')) {
+          el.removeAttribute(attr.name);
+        }
+      }
+    });
+  });
+
+  return container.innerHTML;
+}
+
 function nextFileColor() {
   return FILE_COLORS[loadedFiles.length % FILE_COLORS.length];
 }
 
-function registerFile(name) {
-  const file = { id: fileIdCounter++, name, color: nextFileColor(), visible: true, type: 'propio' };
+// "kind" distingue entre capas vectoriales locales (KML/Shapefile/GeoJSON,
+// con features propias en allItems) y capas remotas (WMS, sin allItems).
+function registerFile(name, kind) {
+  const file = { id: fileIdCounter++, name, color: nextFileColor(), visible: true, type: 'propio', kind: kind || 'vector' };
   loadedFiles.push(file);
+  return file;
+}
+
+// ---- Capas WMS remotas --------------------------------------------------
+// A diferencia de una capa vectorial local, una capa WMS no tiene features
+// propias (allItems): es un único L.tileLayer.wms que Leaflet pinta como
+// imagen del servidor remoto. Se integra al mismo loadedFiles[] (con
+// kind:'wms') para reusar el panel de capas, pero el resto del código que
+// recorre allItems por fileId simplemente no encuentra nada para ella, que
+// es el comportamiento correcto: no debe tratarse como vectorial.
+function addWmsLayer(name, url, wmsLayerName, opts) {
+  opts = opts || {};
+  const normalizedUrl = (url || '').trim();
+  const normalizedLayer = (wmsLayerName || '').trim();
+  const displayName = (name || '').trim() || normalizedLayer || 'Capa WMS';
+
+  if (!opts.skipDuplicateCheck) {
+    const dup = loadedFiles.find(f => f.kind === 'wms' && f.wmsUrl === normalizedUrl && f.wmsLayerName === normalizedLayer);
+    if (dup) {
+      toast(`"${dup.name}" ya está agregada`);
+      return null;
+    }
+  }
+
+  const file = {
+    id: fileIdCounter++,
+    name: displayName,
+    color: opts.color || nextFileColor(),
+    visible: opts.visible !== undefined ? opts.visible : true,
+    type: 'propio',
+    kind: 'wms',
+    wmsUrl: normalizedUrl,
+    wmsLayerName: normalizedLayer
+  };
+
+  const tileLayer = L.tileLayer.wms(normalizedUrl, {
+    layers: normalizedLayer,
+    format: 'image/png',
+    transparent: true,
+    version: '1.1.1',
+    attribution: displayName
+  });
+
+  // Un error de tile (URL/capa inexistente, servidor caído) no lanza una
+  // excepción síncrona — Leaflet lo reporta vía este evento.
+  let erroredOnce = false;
+  tileLayer.on('tileerror', () => {
+    if (erroredOnce) return;
+    erroredOnce = true;
+    toast(`No se pudo cargar la capa WMS "${displayName}" — revisá la URL o el nombre de capa`);
+  });
+
+  file.wmsLayer = tileLayer;
+  loadedFiles.push(file);
+  if (file.visible) tileLayer.addTo(map);
+  refreshAll();
   return file;
 }
 
@@ -2026,10 +2161,46 @@ document.getElementById('convertRunBtn').addEventListener('click', async () => {
   }
 });
 
+document.getElementById('wmsbtn').addEventListener('click', () => {
+  document.getElementById('wmsModal').classList.add('open');
+  document.getElementById('wmsStatus').textContent = '';
+});
+document.getElementById('wmsModalClose').addEventListener('click', () => {
+  document.getElementById('wmsModal').classList.remove('open');
+});
+document.getElementById('wmsModal').addEventListener('click', (e) => {
+  if (e.target.id === 'wmsModal') document.getElementById('wmsModal').classList.remove('open');
+});
+document.getElementById('wmsRunBtn').addEventListener('click', () => {
+  const name = document.getElementById('wmsNameInput').value;
+  const url = document.getElementById('wmsUrlInput').value.trim();
+  const layerName = document.getElementById('wmsLayerInput').value.trim();
+  const status = document.getElementById('wmsStatus');
+
+  if (!url || !layerName) {
+    status.textContent = 'Completá la URL y el nombre de la capa WMS.';
+    return;
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    status.textContent = 'La URL debe empezar con http:// o https://';
+    return;
+  }
+
+  const added = addWmsLayer(name, url, layerName);
+  if (added) {
+    status.textContent = `✅ "${added.name}" agregada.`;
+    setTimeout(() => document.getElementById('wmsModal').classList.remove('open'), 700);
+  }
+});
+
 // Reconstruye una capa a partir de los datos guardados en un visor exportado,
 // preservando color/tipo/visibilidad originales (no se re-asignan).
 function restoreLayer(def) {
-  const file = { id: fileIdCounter++, name: def.name, color: def.color, visible: def.visible, type: def.type };
+  if (def.format === 'wms') {
+    addWmsLayer(def.name, def.wmsUrl, def.wmsLayerName, { visible: def.visible, color: def.color, skipDuplicateCheck: true });
+    return;
+  }
+  const file = { id: fileIdCounter++, name: def.name, color: def.color, visible: def.visible, type: def.type, kind: 'vector' };
   loadedFiles.push(file);
   if (def.format === 'geojson') {
     file.sourceGeoJSON = def.geo;
@@ -2050,6 +2221,9 @@ function exportViewer() {
     return;
   }
   const layersData = loadedFiles.map(f => {
+    if (f.kind === 'wms') {
+      return { name: f.name, type: f.type, color: f.color, visible: f.visible, format: 'wms', wmsUrl: f.wmsUrl, wmsLayerName: f.wmsLayerName };
+    }
     if (f.sourceGeoJSON) {
       return { name: f.name, type: f.type, color: f.color, visible: f.visible, format: 'geojson', geo: f.sourceGeoJSON };
     }
@@ -2139,6 +2313,13 @@ async function handleFiles(fileList) {
 }
 
 function removeFile(fileId) {
+  const file = loadedFiles.find(f => f.id === fileId);
+  if (file && file.kind === 'wms') {
+    if (file.wmsLayer) map.removeLayer(file.wmsLayer);
+    loadedFiles = loadedFiles.filter(f => f.id !== fileId);
+    refreshAll();
+    return;
+  }
   const toRemove = allItems.filter(i => i.fileId === fileId);
   toRemove.forEach(i => layerGroup.removeLayer(i.layer));
   allItems = allItems.filter(i => i.fileId !== fileId);
@@ -2150,6 +2331,11 @@ function toggleFileVisibility(fileId, visible) {
   const file = loadedFiles.find(f => f.id === fileId);
   if (!file) return;
   file.visible = visible;
+  if (file.kind === 'wms') {
+    if (visible) file.wmsLayer.addTo(map);
+    else map.removeLayer(file.wmsLayer);
+    return;
+  }
   allItems.filter(i => i.fileId === fileId).forEach(i => {
     if (visible) layerGroup.addLayer(i.layer);
     else layerGroup.removeLayer(i.layer);
@@ -2197,6 +2383,7 @@ function refreshAll() {
 
 function clearAll() {
   layerGroup.clearLayers();
+  loadedFiles.forEach(f => { if (f.kind === 'wms' && f.wmsLayer) map.removeLayer(f.wmsLayer); });
   allItems = [];
   loadedFiles = [];
   idCounter = 0;
@@ -2207,6 +2394,18 @@ function clearAll() {
 }
 
 function buildLayerRow(file) {
+  if (file.kind === 'wms') {
+    return `
+      <div class="layer-row" data-file-id="${file.id}">
+        <input type="checkbox" class="lvis" ${file.visible ? 'checked' : ''} />
+        <span class="swatch" style="background:${file.color};" title="Capa WMS remota"></span>
+        <span class="lname" title="${escapeHtml(file.name)} — ${escapeHtml(file.wmsUrl)}">${escapeHtml(file.name)}</span>
+        <span class="ltype ltype-wms" title="Capa WMS remota (${escapeHtml(file.wmsLayerName)})">WMS</span>
+        <span class="lcount">remota</span>
+        <button class="lremove" title="Quitar capa">×</button>
+      </div>
+    `;
+  }
   const fileItems = allItems.filter(i => i.fileId === file.id);
   const hasEstado = fileItems.some(i => i.estado);
   const swatchStyle = hasEstado
@@ -2230,8 +2429,10 @@ function renderLayersPanel() {
     panel.innerHTML = '';
     return;
   }
-  const seaFiles = loadedFiles.filter(f => f.type === 'sea');
-  const propioFiles = loadedFiles.filter(f => f.type !== 'sea');
+  const wmsFiles = loadedFiles.filter(f => f.kind === 'wms');
+  const vectorFiles = loadedFiles.filter(f => f.kind !== 'wms');
+  const seaFiles = vectorFiles.filter(f => f.type === 'sea');
+  const propioFiles = vectorFiles.filter(f => f.type !== 'sea');
 
   let html = '';
   if (propioFiles.length) {
@@ -2242,16 +2443,22 @@ function renderLayersPanel() {
     html += `<div class="layers-title" style="margin-top:${propioFiles.length ? '10px' : '0'};">Proyectos SEA cercanos (${seaFiles.length})</div>`;
     html += seaFiles.map(buildLayerRow).join('');
   }
+  if (wmsFiles.length) {
+    html += `<div class="layers-title" style="margin-top:${(propioFiles.length || seaFiles.length) ? '10px' : '0'};">Capas WMS (${wmsFiles.length})</div>`;
+    html += wmsFiles.map(buildLayerRow).join('');
+  }
   panel.innerHTML = html;
 
   panel.querySelectorAll('.layer-row').forEach(row => {
     const fileId = Number(row.dataset.fileId);
+    const file = loadedFiles.find(f => f.id === fileId);
     row.querySelector('.lvis').addEventListener('change', (e) => toggleFileVisibility(fileId, e.target.checked));
     row.querySelector('.lremove').addEventListener('click', () => removeFile(fileId));
-    row.querySelector('.ltype').addEventListener('click', () => {
-      const file = loadedFiles.find(f => f.id === fileId);
-      setFileType(fileId, file.type === 'sea' ? 'propio' : 'sea');
-    });
+    if (file && file.kind !== 'wms') {
+      row.querySelector('.ltype').addEventListener('click', () => {
+        setFileType(fileId, file.type === 'sea' ? 'propio' : 'sea');
+      });
+    }
   });
 }
 
