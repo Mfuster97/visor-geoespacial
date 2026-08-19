@@ -669,10 +669,12 @@
   .wms-layer-item {
     padding: 8px 10px;
     border-bottom: 1px solid var(--border);
+    border-left: 3px solid transparent;
     cursor: pointer;
   }
   .wms-layer-item:last-child { border-bottom: none; }
   .wms-layer-item:hover { background: var(--panel); }
+  .wms-layer-item.selected { background: var(--panel); border-left-color: var(--accent); }
   .wms-layer-item-title { font-size: 13px; font-weight: 600; color: var(--text); }
   .wms-layer-item-name { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
   .wms-layer-item-abstract {
@@ -1783,6 +1785,16 @@ function addWmsLayer(name, url, wmsLayerName, opts) {
   file.wmsLayer = tileLayer;
   loadedFiles.push(file);
   if (file.visible) tileLayer.addTo(map);
+
+  // opts.bounds viene del BoundingBox geográfico detectado por GetCapabilities
+  // (ver selectWmsLayer) — es opcional: el alta manual y restoreLayer() no lo pasan.
+  if (opts.bounds) {
+    const b = opts.bounds;
+    if ([b.south, b.west, b.north, b.east].every(Number.isFinite)) {
+      map.fitBounds([[b.south, b.west], [b.north, b.east]], { padding: [40, 40] });
+    }
+  }
+
   refreshAll();
   return file;
 }
@@ -1970,6 +1982,10 @@ async function fetchWmsCapabilities(baseUrl) {
 // Capas devueltas por el último "Buscar capas" exitoso — vive en memoria
 // para que filtrar la lista no dispare un nuevo fetch (ver renderWmsLayerList).
 let wmsDiscoveredLayers = [];
+// Name de la capa seleccionada en la lista (solo para resaltarla visualmente
+// al re-renderizar) y su BoundingBox pendiente de usar en el próximo fitBounds.
+let wmsSelectedLayerName = null;
+let pendingWmsBounds = null;
 
 // Pinta en #wmsLayerList las capas de "layers" que coincidan con filterText
 // (substring case-insensitive sobre name/title/abstract). No vuelve a pedir
@@ -1999,8 +2015,9 @@ function renderWmsLayerList(layers, filterText) {
     const abstractHtml = layer.abstract
       ? `<div class="wms-layer-item-abstract" title="${escapeHtml(layer.abstract)}">${escapeHtml(layer.abstract)}</div>`
       : '';
+    const selectedClass = layer.name === wmsSelectedLayerName ? ' selected' : '';
     return `
-      <div class="wms-layer-item">
+      <div class="wms-layer-item${selectedClass}">
         <div class="wms-layer-item-title">${escapeHtml(layer.title || layer.name)}</div>
         <div class="wms-layer-item-name">${escapeHtml(layer.name)}</div>
         ${abstractHtml}
@@ -2013,6 +2030,25 @@ function renderWmsLayerList(layers, filterText) {
     : '';
 
   listEl.innerHTML = rows + truncatedNote;
+
+  // El orden de .wms-layer-item en el DOM coincide con "visible" — se
+  // adjuntan los listeners después de insertar el HTML (evita mezclar
+  // innerHTML con atributos onclick="" sobre datos del servidor).
+  const rowEls = listEl.querySelectorAll('.wms-layer-item');
+  rowEls.forEach((rowEl, i) => {
+    rowEl.addEventListener('click', () => selectWmsLayer(visible[i]));
+  });
+}
+
+// Se llama al hacer clic en una capa de la lista de resultados: rellena los
+// campos manuales (que el usuario puede seguir editando a mano después) y
+// guarda el BoundingBox para que addWmsLayer() haga fitBounds al agregarla.
+function selectWmsLayer(layer) {
+  wmsSelectedLayerName = layer.name;
+  pendingWmsBounds = layer.bbox || null;
+  document.getElementById('wmsNameInput').value = layer.title || layer.name;
+  document.getElementById('wmsLayerInput').value = layer.name;
+  renderWmsLayerList(wmsDiscoveredLayers, document.getElementById('wmsLayerFilterInput').value);
 }
 
 async function addKmzFile(arrayBuffer, filename) {
@@ -2436,6 +2472,8 @@ document.getElementById('convertRunBtn').addEventListener('click', async () => {
 // abrir o cerrar el modal para que no quede una búsqueda vieja visible.
 function resetWmsDiscovery() {
   wmsDiscoveredLayers = [];
+  wmsSelectedLayerName = null;
+  pendingWmsBounds = null;
   document.getElementById('wmsDiscoverStatus').textContent = '';
   document.getElementById('wmsLayerFilterInput').value = '';
   document.getElementById('wmsLayerFilterWrap').hidden = true;
@@ -2473,6 +2511,8 @@ document.getElementById('wmsDiscoverBtn').addEventListener('click', async () => 
   filterWrap.hidden = true;
   filterInput.value = '';
   wmsDiscoveredLayers = [];
+  wmsSelectedLayerName = null;
+  pendingWmsBounds = null;
   status.textContent = 'Buscando...';
 
   try {
@@ -2509,9 +2549,14 @@ document.getElementById('wmsRunBtn').addEventListener('click', () => {
     return;
   }
 
-  const added = addWmsLayer(name, url, layerName);
+  // pendingWmsBounds solo aplica si la capa que se está agregando es la que
+  // el usuario seleccionó en la lista — si editó el nombre de capa a mano
+  // después de seleccionar, no forzamos un fitBounds que ya no correspondería.
+  const bounds = layerName === wmsSelectedLayerName ? pendingWmsBounds : null;
+  const added = addWmsLayer(name, url, layerName, { bounds });
   if (added) {
     status.textContent = `✅ "${added.name}" agregada.`;
+    pendingWmsBounds = null;
     setTimeout(() => document.getElementById('wmsModal').classList.remove('open'), 700);
   }
 });
