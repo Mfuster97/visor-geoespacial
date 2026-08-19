@@ -332,6 +332,17 @@
     cursor: pointer;
   }
   .style-range-input { width: 100%; accent-color: var(--accent); cursor: pointer; }
+  .style-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    cursor: pointer;
+    margin: 10px 0 4px;
+  }
+  .style-checkbox-row input { accent-color: var(--accent); cursor: pointer; }
+  #styleModal select.modal-text-input { cursor: pointer; }
 
   .layout {
     flex: 1;
@@ -911,17 +922,35 @@
     </div>
     <p class="modal-hint" id="styleModalLayerName"></p>
 
+    <label class="style-checkbox-row" for="styleFillEnabled">
+      <input type="checkbox" id="styleFillEnabled" />
+      Relleno activado
+    </label>
     <label class="modal-field-label" for="styleFillColor">Color de relleno</label>
     <input type="color" id="styleFillColor" class="style-color-input" />
+    <label class="modal-field-label" for="styleOpacity">Opacidad de relleno: <span id="styleOpacityValue">30</span>%</label>
+    <input type="range" id="styleOpacity" class="style-range-input" min="0" max="1" step="0.05" />
 
     <label class="modal-field-label" for="styleBorderColor">Color de borde</label>
     <input type="color" id="styleBorderColor" class="style-color-input" />
-
+    <label class="modal-field-label" for="styleStrokeOpacity">Opacidad de borde: <span id="styleStrokeOpacityValue">100</span>%</label>
+    <input type="range" id="styleStrokeOpacity" class="style-range-input" min="0" max="1" step="0.05" />
     <label class="modal-field-label" for="styleWeight">Grosor de borde: <span id="styleWeightValue">3</span>px</label>
     <input type="range" id="styleWeight" class="style-range-input" min="1" max="10" step="1" />
+    <label class="modal-field-label" for="styleDashArray">Estilo de línea</label>
+    <select id="styleDashArray" class="modal-text-input">
+      <option value="">Sólida</option>
+      <option value="8,6">Discontinua</option>
+    </select>
 
-    <label class="modal-field-label" for="styleOpacity">Opacidad de relleno: <span id="styleOpacityValue">30</span>%</label>
-    <input type="range" id="styleOpacity" class="style-range-input" min="0" max="1" step="0.05" />
+    <label class="modal-field-label" for="stylePointRadius">Tamaño de puntos: <span id="stylePointRadiusValue">7</span>px</label>
+    <input type="range" id="stylePointRadius" class="style-range-input" min="2" max="20" step="1" />
+    <label class="modal-field-label" for="stylePointShape">Forma de puntos</label>
+    <select id="stylePointShape" class="modal-text-input">
+      <option value="circle">Círculo</option>
+      <option value="square">Cuadrado</option>
+      <option value="triangle">Triángulo</option>
+    </select>
 
     <button id="styleResetBtn" class="secondary" style="margin-top:14px; width:100%;">Restablecer color base</button>
   </div>
@@ -3047,16 +3076,29 @@ document.getElementById('styleModalClose').addEventListener('click', () => {
 document.getElementById('styleModal').addEventListener('click', (e) => {
   if (e.target.id === 'styleModal') document.getElementById('styleModal').classList.remove('open');
 });
-['styleFillColor', 'styleBorderColor', 'styleWeight', 'styleOpacity'].forEach(id => {
-  document.getElementById(id).addEventListener('input', applyStyleFromModal);
+[
+  'styleFillEnabled', 'styleFillColor', 'styleBorderColor', 'styleWeight',
+  'styleOpacity', 'styleStrokeOpacity', 'styleDashArray', 'stylePointRadius', 'stylePointShape'
+].forEach(id => {
+  const el = document.getElementById(id);
+  // input: se dispara al instante con sliders/color pickers. change: red de
+  // seguridad para <select>/checkbox en navegadores donde "input" no aplica.
+  el.addEventListener('input', applyStyleFromModal);
+  el.addEventListener('change', applyStyleFromModal);
 });
 document.getElementById('styleResetBtn').addEventListener('click', () => {
   const file = loadedFiles.find(f => f.id === styleModalFileId);
   if (!file) return;
-  document.getElementById('styleFillColor').value = file.color;
-  document.getElementById('styleBorderColor').value = file.color;
-  document.getElementById('styleWeight').value = 3;
-  document.getElementById('styleOpacity').value = 0.3;
+  const d = defaultStyleFor(file);
+  document.getElementById('styleFillEnabled').checked = d.fill;
+  document.getElementById('styleFillColor').value = d.fillColor;
+  document.getElementById('styleBorderColor').value = d.color;
+  document.getElementById('styleWeight').value = d.weight;
+  document.getElementById('styleOpacity').value = d.fillOpacity;
+  document.getElementById('styleStrokeOpacity').value = d.strokeOpacity;
+  document.getElementById('styleDashArray').value = d.dashArray;
+  document.getElementById('stylePointRadius').value = d.radius;
+  document.getElementById('stylePointShape').value = d.pointShape;
   applyStyleFromModal();
 });
 
@@ -3186,8 +3228,9 @@ async function handleFiles(fileList) {
 }
 
 // ---- Simbología personalizada por capa ---------------------------------
-// file.style = { fillColor, color, weight, opacity } | undefined ("undefined"
-// = coloreado automático de siempre: file.color, o por estado en capas SEA).
+// file.style = { fillColor, color, weight, fillOpacity, strokeOpacity,
+// dashArray, fill, radius, pointShape } | undefined ("undefined" = coloreado
+// automático de siempre: file.color, o por estado en capas SEA).
 // Se aplica con setStyle() sobre los Leaflet layers ya creados en vez de
 // enhebrar el override por todo parseKml/geometryToLayer/addGeoJsonFeatures:
 // un solo punto de verdad más simple, y funciona igual sin importar de qué
@@ -3202,35 +3245,106 @@ function applyLeafletStyle(layer, style) {
   if (typeof layer.eachLayer === 'function') layer.eachLayer(sub => applyLeafletStyle(sub, style));
 }
 
+// Dibuja un cuadrado/triángulo en vez del círculo por defecto de un
+// CircleMarker. Leaflet (renderer SVG) no tiene "formas" de punto nativas —
+// en vez de migrar los puntos a L.marker con divIcon (cambiaría el tipo de
+// layer en toda la app: popups, bounds, export, etc.), se sobreescribe
+// _updatePath() de la instancia para que dibuje otro "d" en el mismo <path>
+// SVG que Leaflet ya crea y estiliza (color/weight/opacity siguen yendo por
+// el setStyle() normal, intactos). Réplica del mismo cálculo que usa
+// L.SVG._updateCircle internamente (mismo _point/_radius), solo cambia la
+// geometría del trazo — así el resto del código sigue viendo un CircleMarker
+// común y corriente.
+function pointShapePathData(shape, cx, cy, r) {
+  if (shape === 'square') {
+    const x0 = cx - r, y0 = cy - r, s = r * 2;
+    return `M${x0},${y0} h${s} v${s} h${-s} Z`;
+  }
+  if (shape === 'triangle') {
+    return `M${cx},${cy - r} L${cx + r * 0.87},${cy + r * 0.5} L${cx - r * 0.87},${cy + r * 0.5} Z`;
+  }
+  const arc = `a${r},${r} 0 1,0 `;
+  return `M${cx - r},${cy}${arc}${r * 2},0 ${arc}${-r * 2},0 `;
+}
+
+function applyPointShape(layer, shape) {
+  if (!(layer instanceof L.CircleMarker)) return;
+  if (!shape || shape === 'circle') {
+    if (Object.prototype.hasOwnProperty.call(layer, '_updatePath')) {
+      delete layer._updatePath; // vuelve a heredar CircleMarker.prototype._updatePath (círculo normal)
+      if (layer._map) layer.redraw();
+    }
+    return;
+  }
+  layer._updatePath = function () {
+    if (!this._point || !this._path) return;
+    const r = Math.max(Math.round(this._radius), 1);
+    this._path.setAttribute('d', pointShapePathData(shape, this._point.x, this._point.y, r));
+  };
+  if (layer._map) layer.redraw();
+}
+
+function applyPointShapeRecursive(layer, shape) {
+  applyPointShape(layer, shape);
+  if (typeof layer.eachLayer === 'function') layer.eachLayer(sub => applyPointShapeRecursive(sub, shape));
+}
+
 function applyFileStyle(file) {
   if (!file.style) return;
   const s = file.style;
-  const leafletStyle = { color: s.color, fillColor: s.fillColor, weight: s.weight, fillOpacity: s.opacity };
-  allItems.filter(i => i.fileId === file.id).forEach(item => applyLeafletStyle(item.layer, leafletStyle));
+  const leafletStyle = {
+    color: s.color,
+    fillColor: s.fillColor,
+    weight: s.weight,
+    fillOpacity: s.fillOpacity,
+    opacity: s.strokeOpacity,
+    dashArray: s.dashArray || null,
+    fill: s.fill !== false,
+    radius: s.radius || 7
+  };
+  allItems.filter(i => i.fileId === file.id).forEach(item => {
+    applyLeafletStyle(item.layer, leafletStyle);
+    applyPointShapeRecursive(item.layer, s.pointShape || 'circle');
+  });
 }
 
 let styleModalFileId = null;
+
+function defaultStyleFor(file) {
+  return {
+    fillColor: file.color, color: file.color, weight: 3,
+    fillOpacity: 0.3, strokeOpacity: 1, dashArray: '', fill: true,
+    radius: 7, pointShape: 'circle'
+  };
+}
 
 function openStyleModal(fileId) {
   const file = loadedFiles.find(f => f.id === fileId);
   if (!file) return;
   styleModalFileId = fileId;
 
-  const s = file.style || { fillColor: file.color, color: file.color, weight: 3, opacity: 0.3 };
+  const s = file.style || defaultStyleFor(file);
   document.getElementById('styleModalLayerName').textContent = `Editando: ${file.name}`;
+  document.getElementById('styleFillEnabled').checked = s.fill !== false;
   document.getElementById('styleFillColor').value = s.fillColor;
   document.getElementById('styleBorderColor').value = s.color;
   document.getElementById('styleWeight').value = s.weight;
   document.getElementById('styleWeightValue').textContent = s.weight;
-  document.getElementById('styleOpacity').value = s.opacity;
-  document.getElementById('styleOpacityValue').textContent = Math.round(s.opacity * 100);
+  document.getElementById('styleOpacity').value = s.fillOpacity;
+  document.getElementById('styleOpacityValue').textContent = Math.round(s.fillOpacity * 100);
+  document.getElementById('styleStrokeOpacity').value = s.strokeOpacity;
+  document.getElementById('styleStrokeOpacityValue').textContent = Math.round(s.strokeOpacity * 100);
+  document.getElementById('styleDashArray').value = s.dashArray || '';
+  document.getElementById('stylePointRadius').value = s.radius;
+  document.getElementById('stylePointRadiusValue').textContent = s.radius;
+  document.getElementById('stylePointShape').value = s.pointShape || 'circle';
 
   document.getElementById('styleModal').classList.add('open');
 }
 
-// Lee los 4 controles del modal, los guarda en file.style y los aplica en el
-// acto — se llama en cada evento "input" (arrastrar un slider ya actualiza
-// el mapa), no hace falta un botón "Aplicar" aparte.
+// Lee todos los controles del modal, los guarda en file.style y los aplica
+// en el acto — se llama en cada evento "input"/"change" (arrastrar un
+// slider ya actualiza el mapa), no hace falta un botón "Aplicar" aparte.
 function applyStyleFromModal() {
   const file = loadedFiles.find(f => f.id === styleModalFileId);
   if (!file) return;
@@ -3238,12 +3352,19 @@ function applyStyleFromModal() {
   const fillColor = document.getElementById('styleFillColor').value;
   const color = document.getElementById('styleBorderColor').value;
   const weight = Number(document.getElementById('styleWeight').value);
-  const opacity = Number(document.getElementById('styleOpacity').value);
+  const fillOpacity = Number(document.getElementById('styleOpacity').value);
+  const strokeOpacity = Number(document.getElementById('styleStrokeOpacity').value);
+  const dashArray = document.getElementById('styleDashArray').value;
+  const fill = document.getElementById('styleFillEnabled').checked;
+  const radius = Number(document.getElementById('stylePointRadius').value);
+  const pointShape = document.getElementById('stylePointShape').value;
 
   document.getElementById('styleWeightValue').textContent = weight;
-  document.getElementById('styleOpacityValue').textContent = Math.round(opacity * 100);
+  document.getElementById('styleOpacityValue').textContent = Math.round(fillOpacity * 100);
+  document.getElementById('styleStrokeOpacityValue').textContent = Math.round(strokeOpacity * 100);
+  document.getElementById('stylePointRadiusValue').textContent = radius;
 
-  file.style = { fillColor, color, weight, opacity };
+  file.style = { fillColor, color, weight, fillOpacity, strokeOpacity, dashArray, fill, radius, pointShape };
   applyFileStyle(file);
 
   const swatch = document.querySelector(`.layer-row[data-file-id="${file.id}"] .swatch`);
