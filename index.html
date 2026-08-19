@@ -169,6 +169,28 @@
 
   .search-pin { font-size: 26px; line-height: 1; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.6)); }
 
+  #compassBtn {
+    position: absolute;
+    bottom: 24px;
+    left: 12px;
+    z-index: 1000;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  #compassBtn:hover { background: var(--panel-2); border-color: var(--text-dim); }
+  #compassBtn:active { transform: scale(0.94); }
+
   #basemapControl {
     position: absolute;
     top: 12px;
@@ -767,15 +789,16 @@
         <option value="utm">Cuadrícula UTM</option>
       </select>
     </div>
+    <button id="compassBtn" title="Norte arriba — clic para volver a la vista inicial">🧭</button>
     <div id="measurePanel"></div>
     <div id="empty">
-      <div class="big">Arrastrá uno o varios archivos aquí</div>
-      <div>.kmz, .kml, .shp (+ .dbf/.prj, o zipeado), .geojson — o usá el botón de arriba. Geodatabase (.gdb) no se puede leer en el navegador: exportalo primero a Shapefile o KMZ.</div>
+      <div class="big">Arrastra uno o varios archivos aquí</div>
+      <div>.kmz, .kml, .shp (+ .dbf/.prj, o zipeado), .geojson — o usa el botón de arriba. Geodatabase (.gdb) no se puede leer en el navegador: expórtalo primero a Shapefile o KMZ.</div>
     </div>
   </div>
 </div>
 
-<div id="dropzone"><div class="box">Soltá el/los archivo(s) para agregarlos como capas</div></div>
+<div id="dropzone"><div class="box">Suelta el/los archivo(s) para agregarlos como capas</div></div>
 <div id="toast"></div>
 <div id="loading">Cargando...</div>
 
@@ -1916,7 +1939,7 @@ document.getElementById('convertRunBtn').addEventListener('click', async () => {
     } else {
       await convertFilesToKmz(files);
     }
-    status.textContent = '✅ Listo — revisá tus descargas.';
+    status.textContent = '✅ Listo — revisa tus descargas.';
   } catch (err) {
     console.error(err);
     status.textContent = '❌ ' + err.message;
@@ -1978,7 +2001,7 @@ function exportViewer() {
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 5000);
   const sizeMb = (blob.size / (1024 * 1024)).toFixed(1);
-  toast(`Archivo generado (${sizeMb} MB) — revisá tus descargas`);
+  toast(`Archivo generado (${sizeMb} MB) — revisa tus descargas`);
 }
 
 async function loadOneFile(file) {
@@ -1998,9 +2021,9 @@ async function loadOneFile(file) {
     const text = new TextDecoder('utf-8').decode(buf);
     addGeoJsonFile(JSON.parse(text), file.name);
   } else if (name.endsWith('.shp') || name.endsWith('.dbf') || name.endsWith('.shx') || name.endsWith('.prj')) {
-    toast(`"${file.name}" es parte de un Shapefile: seleccioná junto los .shp/.dbf/.prj (misma selección), o subí un .zip con el shapefile.`);
+    toast(`"${file.name}" es parte de un Shapefile: selecciona junto los .shp/.dbf/.prj (misma selección), o sube un .zip con el shapefile.`);
   } else if (name.endsWith('.gdb') || name.endsWith('.mdb')) {
-    toast(`"${file.name}": un Geodatabase no se puede leer en el navegador (es una carpeta con formato propietario de Esri). Exportalo primero a Shapefile (.zip) o KMZ desde ArcGIS/QGIS.`);
+    toast(`"${file.name}": un Geodatabase no se puede leer en el navegador (es una carpeta con formato propietario de Esri). Expórtalo primero a Shapefile (.zip) o KMZ desde ArcGIS/QGIS.`);
   } else {
     toast(`Formato no soportado: ${file.name}`);
   }
@@ -2114,7 +2137,7 @@ function buildLayerRow(file) {
       <input type="checkbox" class="lvis" ${file.visible ? 'checked' : ''} />
       <span class="swatch" style="${swatchStyle}" title="${hasEstado ? 'Colores por estado del proyecto' : 'Color de capa'}"></span>
       <span class="lname" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-      <button class="ltype ltype-${file.type}" title="Click para cambiar de grupo">${file.type === 'sea' ? 'SEA' : 'Propio'}</button>
+      <button class="ltype ltype-${file.type}" title="Clic para cambiar de grupo">${file.type === 'sea' ? 'SEA' : 'Propio'}</button>
       <span class="lcount">${fileItems.length}</span>
       <button class="lremove" title="Quitar capa">×</button>
     </div>
@@ -2376,6 +2399,11 @@ map.on('moveend zoomend', refreshGrid);
 document.getElementById('gridSelect').addEventListener('change', (e) => {
   gridMode = e.target.value;
   refreshGrid();
+});
+
+const DEFAULT_VIEW = { center: [-27.5, -70.0], zoom: 6 };
+document.getElementById('compassBtn').addEventListener('click', () => {
+  map.setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
 });
 
 // ---- Elevación al hacer clic --------------------------------------------
