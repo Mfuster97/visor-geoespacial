@@ -213,6 +213,18 @@
     border: 1px solid var(--border);
   }
 
+  .grid-label { background: transparent !important; border: none !important; }
+  .grid-label div {
+    transform: translate(2px, -50%);
+    background: rgba(15, 20, 32, 0.75);
+    color: #d8dee9;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9.5px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
   #layersPanel {
     padding: 12px 14px 4px;
   }
@@ -626,6 +638,7 @@
   <h1>🗺️ Visor Geoespacial</h1>
   <span class="filename" id="filename">Ningún archivo cargado</span>
   <button id="measurebtn" class="secondary">📏 Medir</button>
+  <button id="elevationbtn" class="secondary">⛰️ Elevación</button>
   <label id="snaplabel" class="snap-toggle" title="Ajustar los puntos de medición a vértices y líneas de las capas cargadas">
     <input type="checkbox" id="snaptoggle" checked /> Snap
   </label>
@@ -673,6 +686,11 @@
       <label class="snap-toggle" title="Límites, rutas y nombres de lugares">
         <input type="checkbox" id="referenceToggle" checked /> Nombres/límites
       </label>
+      <select id="gridSelect" class="unit-select" title="Cuadrícula de referencia">
+        <option value="none">Sin cuadrícula</option>
+        <option value="latlng">Cuadrícula Lat/Lng</option>
+        <option value="utm">Cuadrícula UTM</option>
+      </select>
     </div>
     <div id="measurePanel"></div>
     <div id="empty">
@@ -933,6 +951,7 @@ function onMeasureDblClick() {
 }
 
 function startMeasuring() {
+  if (elevationActive) stopElevation();
   measureActive = true;
   measurePoints = [];
   snapChains = null;
@@ -1957,6 +1976,156 @@ document.getElementById('referenceToggle').addEventListener('change', (e) => {
   else map.removeLayer(referenceLayer);
 });
 
+// ---- Cuadrícula de referencia (Lat/Lng o UTM) --------------------------
+const gridLayer = L.layerGroup().addTo(map);
+let gridMode = 'none'; // none | latlng | utm
+
+function niceDegInterval(rangeDeg) {
+  const targets = [30, 20, 10, 5, 2, 1, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01, 0.005, 0.002, 0.001, 0.0005];
+  for (const t of targets) { if (rangeDeg / t >= 4) return t; }
+  return targets[targets.length - 1];
+}
+
+function niceMeterInterval(spanMeters) {
+  const targets = [200000, 100000, 50000, 20000, 10000, 5000, 2000, 1000, 500, 200, 100, 50, 20, 10];
+  for (const t of targets) { if (spanMeters / t >= 4) return t; }
+  return targets[targets.length - 1];
+}
+
+function gridLine(latlngs, labelLatLng, labelText) {
+  L.polyline(latlngs, { color: 'rgba(255,255,255,0.35)', weight: 1, interactive: false }).addTo(gridLayer);
+  L.marker(labelLatLng, {
+    icon: L.divIcon({ className: 'grid-label', html: `<div>${labelText}</div>`, iconSize: [0, 0] }),
+    interactive: false
+  }).addTo(gridLayer);
+}
+
+function drawLatLngGrid() {
+  gridLayer.clearLayers();
+  const b = map.getBounds();
+  const latStep = niceDegInterval(b.getNorth() - b.getSouth());
+  const lngStep = niceDegInterval(b.getEast() - b.getWest());
+
+  const startLat = Math.ceil(b.getSouth() / latStep) * latStep;
+  for (let lat = startLat; lat <= b.getNorth(); lat += latStep) {
+    gridLine([[lat, b.getWest()], [lat, b.getEast()]], [lat, b.getWest()], `${lat.toFixed(4)}°`);
+  }
+  const startLng = Math.ceil(b.getWest() / lngStep) * lngStep;
+  for (let lng = startLng; lng <= b.getEast(); lng += lngStep) {
+    gridLine([[b.getSouth(), lng], [b.getNorth(), lng]], [b.getSouth(), lng], `${lng.toFixed(4)}°`);
+  }
+}
+
+function drawUtmGrid() {
+  gridLayer.clearLayers();
+  const b = map.getBounds();
+  const center = map.getCenter();
+  const zone = Math.floor((center.lng + 180) / 6) + 1;
+  const hemi = center.lat < 0 ? 'S' : 'N';
+
+  const corners = [
+    latLngToUtm(b.getSouth(), b.getWest(), zone),
+    latLngToUtm(b.getSouth(), b.getEast(), zone),
+    latLngToUtm(b.getNorth(), b.getWest(), zone),
+    latLngToUtm(b.getNorth(), b.getEast(), zone)
+  ];
+  const minE = Math.min(...corners.map(c => c.easting));
+  const maxE = Math.max(...corners.map(c => c.easting));
+  const minN = Math.min(...corners.map(c => c.northing));
+  const maxN = Math.max(...corners.map(c => c.northing));
+  const step = niceMeterInterval(Math.max(maxE - minE, maxN - minN));
+
+  const startE = Math.ceil(minE / step) * step;
+  for (let e = startE; e <= maxE; e += step) {
+    const p1 = utmToLatLng(e, minN, zone, hemi);
+    const p2 = utmToLatLng(e, maxN, zone, hemi);
+    gridLine([[p1.lat, p1.lng], [p2.lat, p2.lng]], [p1.lat, p1.lng], `${Math.round(e)} mE`);
+  }
+  const startN = Math.ceil(minN / step) * step;
+  for (let n = startN; n <= maxN; n += step) {
+    const p1 = utmToLatLng(minE, n, zone, hemi);
+    const p2 = utmToLatLng(maxE, n, zone, hemi);
+    gridLine([[p1.lat, p1.lng], [p2.lat, p2.lng]], [p1.lat, p1.lng], `${Math.round(n)} mN (${zone}${hemi})`);
+  }
+}
+
+function refreshGrid() {
+  if (gridMode === 'latlng') drawLatLngGrid();
+  else if (gridMode === 'utm') drawUtmGrid();
+  else gridLayer.clearLayers();
+}
+
+map.on('moveend zoomend', refreshGrid);
+document.getElementById('gridSelect').addEventListener('change', (e) => {
+  gridMode = e.target.value;
+  refreshGrid();
+});
+
+// ---- Elevación al hacer clic --------------------------------------------
+let elevationActive = false;
+let elevationMarker = null;
+
+async function getElevation(lat, lng) {
+  try {
+    const res = await fetch(`https://api.opentopodata.org/v1/srtm90m?locations=${lat},${lng}`);
+    if (res.ok) {
+      const data = await res.json();
+      const el = data.results && data.results[0] && data.results[0].elevation;
+      if (el !== null && el !== undefined) return el;
+    }
+  } catch (err) {
+    console.error(err);
+  }
+  // Servicio de respaldo si el principal falla o no cubre esa zona
+  const res2 = await fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lng}`);
+  if (!res2.ok) throw new Error('no se pudo consultar el servicio de elevación');
+  const data2 = await res2.json();
+  return data2.results[0].elevation;
+}
+
+async function onElevationClick(e) {
+  const { lat, lng } = e.latlng;
+  if (elevationMarker) map.removeLayer(elevationMarker);
+  elevationMarker = L.marker([lat, lng], {
+    icon: L.divIcon({ className: 'search-pin', html: '⛰️', iconSize: [26, 26], iconAnchor: [13, 26] })
+  }).addTo(map);
+  elevationMarker.bindPopup(`<div class="popup-title">Consultando elevación…</div>`).openPopup();
+  try {
+    const elevation = await getElevation(lat, lng);
+    elevationMarker.setPopupContent(
+      `<div class="popup-title">⛰️ ${Math.round(elevation)} m s.n.m.</div>` +
+      `<div style="color:var(--text-dim); font-size:11px; margin-top:2px;">${lat.toFixed(5)}, ${lng.toFixed(5)}</div>`
+    );
+  } catch (err) {
+    console.error(err);
+    elevationMarker.setPopupContent(`<div class="popup-title">Error al consultar elevación</div>`);
+    toast('Error al consultar elevación: ' + err.message);
+  }
+}
+
+function startElevation() {
+  if (measureActive) stopMeasuring();
+  elevationActive = true;
+  map.getContainer().style.cursor = 'help';
+  map.on('click', onElevationClick);
+  const btn = document.getElementById('elevationbtn');
+  btn.classList.add('active');
+  btn.textContent = '✕ Terminar elevación';
+}
+
+function stopElevation() {
+  elevationActive = false;
+  map.getContainer().style.cursor = '';
+  map.off('click', onElevationClick);
+  const btn = document.getElementById('elevationbtn');
+  btn.classList.remove('active');
+  btn.textContent = '⛰️ Elevación';
+}
+
+document.getElementById('elevationbtn').addEventListener('click', () => {
+  if (elevationActive) stopElevation(); else startElevation();
+});
+
 // ---- Buscador de lugares y coordenadas ---------------------------------
 let searchMarker = null;
 
@@ -2019,6 +2188,47 @@ function utmToLatLng(easting, northing, zoneNumber, hemisphere) {
 
 function isWithinChileBbox(lat, lng) {
   return lat >= -56 && lat <= -17 && lng >= -76 && lng <= -66;
+}
+
+// Conversión lat/lng → UTM (WGS84), fórmula estándar de Transversa de
+// Mercator directa. Se usa para dibujar la cuadrícula UTM sobre el mapa.
+function latLngToUtm(lat, lng, zoneNumber) {
+  const a = 6378137.0;
+  const eccSquared = 0.00669438;
+  const k0 = 0.9996;
+
+  const latRad = lat * Math.PI / 180;
+  const lngRad = lng * Math.PI / 180;
+  const lonOriginRad = ((zoneNumber - 1) * 6 - 180 + 3) * Math.PI / 180;
+  const eccPrimeSquared = eccSquared / (1 - eccSquared);
+
+  const N = a / Math.sqrt(1 - eccSquared * Math.sin(latRad) * Math.sin(latRad));
+  const T = Math.tan(latRad) * Math.tan(latRad);
+  const C = eccPrimeSquared * Math.cos(latRad) * Math.cos(latRad);
+  const A = Math.cos(latRad) * (lngRad - lonOriginRad);
+
+  const M = a * (
+    (1 - eccSquared / 4 - 3 * eccSquared * eccSquared / 64 - 5 * Math.pow(eccSquared, 3) / 256) * latRad
+    - (3 * eccSquared / 8 + 3 * eccSquared * eccSquared / 32 + 45 * Math.pow(eccSquared, 3) / 1024) * Math.sin(2 * latRad)
+    + (15 * eccSquared * eccSquared / 256 + 45 * Math.pow(eccSquared, 3) / 1024) * Math.sin(4 * latRad)
+    - (35 * Math.pow(eccSquared, 3) / 3072) * Math.sin(6 * latRad)
+  );
+
+  const easting = k0 * N * (
+    A + (1 - T + C) * Math.pow(A, 3) / 6
+    + (5 - 18 * T + T * T + 72 * C - 58 * eccPrimeSquared) * Math.pow(A, 5) / 120
+  ) + 500000.0;
+
+  let northing = k0 * (
+    M + N * Math.tan(latRad) * (
+      A * A / 2
+      + (5 - T + 9 * C + 4 * C * C) * Math.pow(A, 4) / 24
+      + (61 - 58 * T + T * T + 600 * C - 330 * eccPrimeSquared) * Math.pow(A, 6) / 720
+    )
+  );
+  if (lat < 0) northing += 10000000.0;
+
+  return { easting, northing };
 }
 
 // Acepta UTM con zona explícita ("19S 350000 6900000") o sin ella
