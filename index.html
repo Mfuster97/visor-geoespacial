@@ -1392,6 +1392,16 @@ function coordsFromText(text) {
   }).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
 }
 
+// Diagnóstico: array.push(...items) con "items" de decenas de miles de
+// elementos revienta con "Maximum call stack size exceeded" — el spread
+// operator pasa cada elemento como argumento posicional de push(), y los
+// motores JS tienen un límite de argumentos por llamada. Reproducido real:
+// varios polígonos de SNASPE:snap (parques con miles de vértices cada uno)
+// descargados juntos vía WFS. Este bucle simple no tiene ese límite.
+function pushAll(target, items) {
+  for (let i = 0; i < items.length; i++) target.push(items[i]);
+}
+
 function getFolderPath(el) {
   const parts = [];
   let cur = el.parentElement;
@@ -1457,7 +1467,7 @@ function parseKml(kmlText, fileId, fileColor) {
       if (coords.length) {
         layer = L.polyline(coords, { color: color, weight: style.weight });
         type = 'line';
-        bounds.push(...coords);
+        pushAll(bounds, coords);
       }
     } else if (polygon) {
       const outer = polygon.querySelector('outerBoundaryIs coordinates');
@@ -1471,7 +1481,7 @@ function parseKml(kmlText, fileId, fileColor) {
             weight: style.weight
           });
           type = 'polygon';
-          bounds.push(...coords);
+          pushAll(bounds, coords);
         }
       }
     } else if (multiGeom) {
@@ -1482,11 +1492,11 @@ function parseKml(kmlText, fileId, fileColor) {
       });
       multiGeom.querySelectorAll('LineString > coordinates').forEach(c => {
         const co = coordsFromText(c.textContent);
-        if (co.length) { subLayers.push(L.polyline(co, { color: color, weight: style.weight })); bounds.push(...co); }
+        if (co.length) { subLayers.push(L.polyline(co, { color: color, weight: style.weight })); pushAll(bounds, co); }
       });
       multiGeom.querySelectorAll('Polygon outerBoundaryIs coordinates').forEach(c => {
         const co = coordsFromText(c.textContent);
-        if (co.length) { subLayers.push(L.polygon(co, { color: color, fillColor: color, fillOpacity: fillOpacity })); bounds.push(...co); }
+        if (co.length) { subLayers.push(L.polygon(co, { color: color, fillColor: color, fillOpacity: fillOpacity })); pushAll(bounds, co); }
       });
       if (subLayers.length) {
         layer = L.layerGroup(subLayers);
@@ -1596,23 +1606,23 @@ function geometryToLayer(geom, color) {
         }));
       case 'LineString': {
         const coords = g.coordinates.map(toLatLng);
-        bounds.push(...coords);
+        pushAll(bounds, coords);
         return L.polyline(coords, { color, weight: 3 });
       }
       case 'MultiLineString':
         return L.layerGroup(g.coordinates.map(line => {
-          const c = line.map(toLatLng); bounds.push(...c);
+          const c = line.map(toLatLng); pushAll(bounds, c);
           return L.polyline(c, { color, weight: 3 });
         }));
       case 'Polygon': {
         const rings = g.coordinates.map(r => r.map(toLatLng));
-        rings.forEach(r => bounds.push(...r));
+        rings.forEach(r => pushAll(bounds, r));
         return L.polygon(rings, { color, fillColor: color, fillOpacity: 0.28, weight: 2 });
       }
       case 'MultiPolygon':
         return L.layerGroup(g.coordinates.map(poly => {
           const rings = poly.map(r => r.map(toLatLng));
-          rings.forEach(r => bounds.push(...r));
+          rings.forEach(r => pushAll(bounds, r));
           return L.polygon(rings, { color, fillColor: color, fillOpacity: 0.28, weight: 2 });
         }));
       case 'GeometryCollection':
@@ -1650,7 +1660,7 @@ function addGeoJsonFeatures(geojson, fileId, fileColor, folderLabel) {
 
     const result = geometryToLayer(feat.geometry, color);
     if (!result) return;
-    bounds.push(...result.bounds);
+    pushAll(bounds, result.bounds);
 
     const descHtml = buildPropsTableHtml(props);
     const popupContent = `<div class="popup-title">${escapeHtml(String(name))}</div>${descHtml ? `<div class="popup-desc">${descHtml}</div>` : ''}`;
@@ -1847,6 +1857,38 @@ function registerFile(name, kind) {
   return file;
 }
 
+// Zoom mínimo al encuadrar un BoundingBox. Diagnóstico (probado contra
+// SNASPE:snap real en geoportal.cl y un segundo GeoServer real,
+// ide.mma.gob.cl, con 28 capas): el parseo de BBox/CRS/axis-order y las
+// peticiones GetMap/GetFeature son correctos — a zoom 10 los polígonos de
+// SNASPE se renderizan perfectamente. El problema real es de ENCUADRE: el
+// BoundingBox de GetCapabilities de una capa de alcance nacional (ej. todo
+// Chile) dejaba el mapa en zoom ~4, donde en WFS buildGetFeatureUrl() usa
+// map.getBounds() como filtro BBOX de la descarga — con el país entero
+// visible, esa descarga excede WFS_FETCH_TIMEOUT_MS y falla directamente
+// (reproducido: SNASPE:snap sin acotar tarda >20s y aborta = "no se
+// visualiza"). La opción "maxZoom" de fitBounds() sólo limita cuánto se
+// acerca, nunca cuánto se aleja, así que no sirve para esto — se calcula
+// el zoom ideal con getBoundsZoom() y, si sería menor que el piso, se usa
+// setView() en el centro del BoundingBox a ese piso en su lugar.
+//
+// Solo se usa para WFS (ver selectWfsLayer y el handler de "Cargar capa"),
+// no para WMS: en WMS no hay datos reales descargados con los que corregir
+// el encuadre después, y forzar este piso ahí llegó a centrar el mapa en
+// océano vacío para SNASPE:snap (su BoundingBox incluye Isla de Pascua,
+// muy lejos del continente) — ver addWmsLayer, que usa fitBounds() plano.
+const LAYER_SELECT_MIN_ZOOM = 10;
+
+function fitBoundsWithMinZoom(bounds, options) {
+  options = options || {};
+  const idealZoom = map.getBoundsZoom(bounds, false, options.padding);
+  if (idealZoom < LAYER_SELECT_MIN_ZOOM) {
+    map.setView(L.latLngBounds(bounds).getCenter(), LAYER_SELECT_MIN_ZOOM);
+  } else {
+    map.fitBounds(bounds, options);
+  }
+}
+
 // ---- Capas WMS remotas --------------------------------------------------
 // A diferencia de una capa vectorial local, una capa WMS no tiene features
 // propias (allItems): es un único L.tileLayer.wms que Leaflet pinta como
@@ -1902,6 +1944,15 @@ function addWmsLayer(name, url, wmsLayerName, opts) {
 
   // opts.bounds viene del BoundingBox geográfico detectado por GetCapabilities
   // (ver selectWmsLayer) — es opcional: el alta manual y restoreLayer() no lo pasan.
+  // Se usa fitBounds() normal (sin piso de zoom): a diferencia de WFS, acá no
+  // hay datos reales descargados con los que corregir el encuadre después —
+  // solo tenemos el BoundingBox completo de la capa (que puede ser todo un
+  // país, con territorios lejanos incluidos — ver comentario junto a
+  // LAYER_SELECT_MIN_ZOOM). Forzar un zoom mínimo ahí terminó centrando el
+  // mapa en océano vacío para SNASPE:snap (su BoundingBox va de Isla de
+  // Pascua a Chile continental); fitBounds() sin piso al menos deja siempre
+  // visible el área real de la capa, aunque a esa escala una capa muy
+  // detallada se vea chica — eso es inherente a WMS (raster), no un bug.
   if (opts.bounds) {
     const b = opts.bounds;
     if ([b.south, b.west, b.north, b.east].every(Number.isFinite)) {
@@ -2442,7 +2493,7 @@ function selectWfsLayer(layer) {
   if (layer.bbox) {
     const b = layer.bbox;
     if ([b.south, b.west, b.north, b.east].every(Number.isFinite)) {
-      map.fitBounds([[b.south, b.west], [b.north, b.east]], { padding: [40, 40] });
+      fitBoundsWithMinZoom([[b.south, b.west], [b.north, b.east]], { padding: [40, 40] });
     }
   }
 }
@@ -2499,6 +2550,7 @@ function addGeoJsonFile(geojson, filename) {
   const hasEstado = allItems.some(i => i.fileId === file.id && i.estado);
   file.type = hasEstado ? 'sea' : 'propio';
   refreshAll();
+  return totalBounds;
 }
 
 async function shapefileZipToGeoJson(arrayBuffer) {
@@ -3056,7 +3108,14 @@ document.getElementById('wfsRunBtn').addEventListener('click', async () => {
     }
 
     const displayName = (name || '').trim() || typeName;
-    addGeoJsonFile(geojson, displayName);
+    const bounds = addGeoJsonFile(geojson, displayName);
+    // Reencuadra sobre los datos reales ya descargados, no sobre el
+    // BoundingBox de GetCapabilities usado para armar "bbox" arriba: ese
+    // BoundingBox es del área completa de la capa (puede ser todo un país,
+    // incluso con territorios lejanos como Isla de Pascua en SNASPE) y su
+    // centro puede caer en una zona sin datos. Esto sí apunta a donde
+    // quedaron los elementos recién cargados.
+    if (bounds.length) fitBoundsWithMinZoom(bounds, { padding: [40, 40] });
 
     const totalAvailable = typeof geojson.totalFeatures === 'number' ? geojson.totalFeatures : null;
     status.textContent = (totalAvailable && totalAvailable > total)
