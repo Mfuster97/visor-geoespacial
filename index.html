@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Visor de proyectos</title>
+<title>Visor Geoespacial</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -106,6 +106,67 @@
     flex-shrink: 0;
   }
   .unit-select:hover { border-color: var(--text-dim); }
+
+  #placeSearchControl {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1001;
+    width: min(360px, calc(100vw - 24px));
+  }
+  #placeSearchControl .search-box {
+    display: flex;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    overflow: hidden;
+  }
+  #placeSearchInput {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    padding: 9px 12px;
+    font-size: 13px;
+    outline: none;
+  }
+  #placeSearchInput::placeholder { color: var(--text-dim); }
+  #placeSearchBtn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 0 14px;
+    cursor: pointer;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  #placeSearchBtn:hover { background: #3d7ae0; }
+  #placeSearchResults {
+    display: none;
+    margin-top: 6px;
+    max-height: 260px;
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  #placeSearchResults.open { display: block; }
+  #placeSearchResults .search-result {
+    padding: 9px 12px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+  }
+  #placeSearchResults .search-result:last-child { border-bottom: none; }
+  #placeSearchResults .search-result:hover { background: var(--panel-2); color: var(--text); }
+  #placeSearchResults .search-empty { padding: 10px 12px; font-size: 12.5px; color: var(--text-dim); }
+
+  .search-pin { font-size: 26px; line-height: 1; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.6)); }
 
   #basemapControl {
     position: absolute;
@@ -539,6 +600,7 @@
       box-shadow: 6px 0 24px rgba(0,0,0,0.5);
     }
     #sidebar.open { transform: translateX(0); }
+    #basemapControl { top: 60px; left: 12px; }
   }
 
   @media (max-width: 640px) {
@@ -547,7 +609,7 @@
     header .filename { order: 10; flex-basis: 100%; font-size: 11px; }
     button.secondary, #filebtn, #exportbtn { font-size: 12px; padding: 6px 10px; }
     .snap-toggle { font-size: 11px; }
-    #basemapControl { top: 80px; left: 12px; flex-direction: column; align-items: stretch; gap: 6px; }
+    #basemapControl { flex-direction: column; align-items: stretch; gap: 6px; }
   }
 
   @media (max-width: 420px) {
@@ -561,7 +623,7 @@
 
 <header>
   <button id="sidebarToggle" class="secondary" aria-label="Mostrar panel lateral">☰</button>
-  <h1>🗺️ Visor de proyectos</h1>
+  <h1>🗺️ Visor Geoespacial</h1>
   <span class="filename" id="filename">Ningún archivo cargado</span>
   <button id="measurebtn" class="secondary">📏 Medir</button>
   <label id="snaplabel" class="snap-toggle" title="Ajustar los puntos de medición a vértices y líneas de las capas cargadas">
@@ -593,6 +655,13 @@
   </div>
   <div style="flex:1; position:relative;">
     <div id="map"></div>
+    <div id="placeSearchControl">
+      <div class="search-box">
+        <input type="text" id="placeSearchInput" placeholder="Buscar lugar, lat/lng o UTM (ej: 19S 350000 6900000)" autocomplete="off" />
+        <button id="placeSearchBtn" title="Buscar">🔎</button>
+      </div>
+      <div id="placeSearchResults"></div>
+    </div>
     <div id="basemapControl">
       <select id="basemapSelect" class="unit-select" title="Mapa base">
         <option value="satelite">🛰️ Satélite</option>
@@ -1886,6 +1955,178 @@ document.getElementById('basemapSelect').addEventListener('change', (e) => {
 document.getElementById('referenceToggle').addEventListener('change', (e) => {
   if (e.target.checked) referenceLayer.addTo(map);
   else map.removeLayer(referenceLayer);
+});
+
+// ---- Buscador de lugares y coordenadas ---------------------------------
+let searchMarker = null;
+
+// Acepta "lat, lng" / "lat lng" en grados decimales, ej: "-27.5, -70.0"
+function parseCoordinatePair(text) {
+  const m = text.trim().match(/^(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const lat = parseFloat(m[1]);
+  const lng = parseFloat(m[2]);
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return { lat, lng };
+}
+
+// Conversión UTM (WGS84) → lat/lng. Fórmula estándar de Transversa de
+// Mercator inversa (elipsoide WGS84), la misma que usan la mayoría de los
+// conversores UTM de referencia.
+function utmToLatLng(easting, northing, zoneNumber, hemisphere) {
+  const a = 6378137.0;
+  const eccSquared = 0.00669438;
+  const k0 = 0.9996;
+
+  const x = easting - 500000.0;
+  let y = northing;
+  if (hemisphere === 'S') y -= 10000000.0;
+
+  const lonOrigin = (zoneNumber - 1) * 6 - 180 + 3;
+  const eccPrimeSquared = eccSquared / (1 - eccSquared);
+
+  const M = y / k0;
+  const mu = M / (a * (1 - eccSquared / 4 - 3 * eccSquared * eccSquared / 64 - 5 * Math.pow(eccSquared, 3) / 256));
+
+  const e1 = (1 - Math.sqrt(1 - eccSquared)) / (1 + Math.sqrt(1 - eccSquared));
+  const phi1 = mu
+    + (3 * e1 / 2 - 27 * Math.pow(e1, 3) / 32) * Math.sin(2 * mu)
+    + (21 * e1 * e1 / 16 - 55 * Math.pow(e1, 4) / 32) * Math.sin(4 * mu)
+    + (151 * Math.pow(e1, 3) / 96) * Math.sin(6 * mu)
+    + (1097 * Math.pow(e1, 4) / 512) * Math.sin(8 * mu);
+
+  const N1 = a / Math.sqrt(1 - eccSquared * Math.sin(phi1) * Math.sin(phi1));
+  const T1 = Math.tan(phi1) * Math.tan(phi1);
+  const C1 = eccPrimeSquared * Math.cos(phi1) * Math.cos(phi1);
+  const R1 = a * (1 - eccSquared) / Math.pow(1 - eccSquared * Math.sin(phi1) * Math.sin(phi1), 1.5);
+  const D = x / (N1 * k0);
+
+  let lat = phi1 - (N1 * Math.tan(phi1) / R1) * (
+    D * D / 2
+    - (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * eccPrimeSquared) * Math.pow(D, 4) / 24
+    + (61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * eccPrimeSquared - 3 * C1 * C1) * Math.pow(D, 6) / 720
+  );
+  lat = lat * 180 / Math.PI;
+
+  let lon = (D
+    - (1 + 2 * T1 + C1) * Math.pow(D, 3) / 6
+    + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * eccPrimeSquared + 24 * T1 * T1) * Math.pow(D, 5) / 120
+  ) / Math.cos(phi1);
+  lon = lonOrigin + lon * 180 / Math.PI;
+
+  return { lat, lng: lon };
+}
+
+function isWithinChileBbox(lat, lng) {
+  return lat >= -56 && lat <= -17 && lng >= -76 && lng <= -66;
+}
+
+// Acepta UTM con zona explícita ("19S 350000 6900000") o sin ella
+// ("350000 6900000"), en cuyo caso prueba varias zonas típicas de Chile
+// continental y se queda con la que cae dentro del país.
+function parseUtmPair(text) {
+  const m = text.trim().match(/^(?:(\d{1,2})\s*([NnSs])\s+)?(\d{4,7}(?:\.\d+)?)[,;\s]+(\d{6,8}(?:\.\d+)?)$/);
+  if (!m) return null;
+  const easting = parseFloat(m[3]);
+  const northing = parseFloat(m[4]);
+  if (easting < 100000 || easting > 900000) return null;
+  if (northing < 0 || northing > 10000000) return null;
+
+  if (m[1]) {
+    const zone = parseInt(m[1], 10);
+    const hemi = m[2].toUpperCase();
+    const { lat, lng } = utmToLatLng(easting, northing, zone, hemi);
+    return { lat, lng, zone: `${zone}${hemi}` };
+  }
+
+  for (const zone of [19, 18, 17, 20]) {
+    const r = utmToLatLng(easting, northing, zone, 'S');
+    if (isWithinChileBbox(r.lat, r.lng)) return { lat: r.lat, lng: r.lng, zone: `${zone}S (auto)` };
+  }
+  const fallback = utmToLatLng(easting, northing, 19, 'S');
+  return { lat: fallback.lat, lng: fallback.lng, zone: '19S (sin confirmar)' };
+}
+
+function goToLatLng(lat, lng, label) {
+  map.setView([lat, lng], 15);
+  if (searchMarker) map.removeLayer(searchMarker);
+  searchMarker = L.marker([lat, lng], {
+    icon: L.divIcon({ className: 'search-pin', html: '📍', iconSize: [26, 26], iconAnchor: [13, 26] })
+  }).addTo(map);
+  if (label) {
+    searchMarker.bindPopup(`<div class="popup-title">${escapeHtml(label)}</div>`).openPopup();
+  }
+}
+
+async function geocodePlace(query) {
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=6&q=${encodeURIComponent(query)}`;
+  const res = await fetch(url, { headers: { 'Accept-Language': 'es' } });
+  if (!res.ok) throw new Error('no se pudo consultar el servicio de búsqueda');
+  return res.json();
+}
+
+function closeSearchResults() {
+  document.getElementById('placeSearchResults').classList.remove('open');
+}
+
+function renderSearchResults(results) {
+  const box = document.getElementById('placeSearchResults');
+  if (!results.length) {
+    box.innerHTML = `<div class="search-empty">Sin resultados</div>`;
+    box.classList.add('open');
+    return;
+  }
+  box.innerHTML = results.map((r, i) => `<div class="search-result" data-idx="${i}">${escapeHtml(r.display_name)}</div>`).join('');
+  box.classList.add('open');
+  box.querySelectorAll('.search-result').forEach(el => {
+    el.addEventListener('click', () => {
+      const r = results[Number(el.dataset.idx)];
+      goToLatLng(parseFloat(r.lat), parseFloat(r.lon), r.display_name);
+      closeSearchResults();
+      document.getElementById('placeSearchInput').value = r.display_name;
+    });
+  });
+}
+
+async function runPlaceSearch() {
+  const input = document.getElementById('placeSearchInput');
+  const query = input.value.trim();
+  if (!query) return;
+
+  const coords = parseCoordinatePair(query);
+  if (coords) {
+    goToLatLng(coords.lat, coords.lng, `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`);
+    closeSearchResults();
+    return;
+  }
+
+  const utm = parseUtmPair(query);
+  if (utm) {
+    goToLatLng(utm.lat, utm.lng, `UTM ${utm.zone} — ${query}`);
+    closeSearchResults();
+    return;
+  }
+
+  showLoading(true);
+  try {
+    const results = await geocodePlace(query);
+    renderSearchResults(results);
+  } catch (err) {
+    console.error(err);
+    toast('Error al buscar: ' + err.message);
+  } finally {
+    showLoading(false);
+  }
+}
+
+document.getElementById('placeSearchBtn').addEventListener('click', runPlaceSearch);
+document.getElementById('placeSearchInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') runPlaceSearch();
+  if (e.key === 'Escape') closeSearchResults();
+});
+document.addEventListener('click', (e) => {
+  const control = document.getElementById('placeSearchControl');
+  if (control && !control.contains(e.target)) closeSearchResults();
 });
 
 const dropzone = document.getElementById('dropzone');
