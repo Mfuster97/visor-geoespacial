@@ -327,15 +327,23 @@
   }
   .layer-row {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    gap: 3px;
     padding: 6px 6px;
     margin: 0 -6px;
     font-size: 13px;
     border-radius: var(--radius-sm);
-    transition: background 0.1s ease;
+    border-left: 3px solid transparent;
+    transition: background 0.1s ease, border-color 0.1s ease;
+    cursor: pointer;
   }
   .layer-row:hover { background: var(--panel-2); }
+  .layer-row.selected { background: var(--accent-soft); border-left-color: var(--accent); }
+  .layer-row .lrow-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
   .layer-row input[type="checkbox"] { flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
   .layer-row .swatch {
     width: 11px;
@@ -346,9 +354,22 @@
   }
   .layer-row .lname {
     flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .layer-row .lname-edit {
+    flex: 1;
+    min-width: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 13px;
+    padding: 2px 6px;
+    outline: none;
+    cursor: text;
   }
   .layer-row .lcount {
     color: var(--text-faint);
@@ -371,20 +392,25 @@
   .layer-row .ltype-sea { background: rgba(79, 140, 255, 0.2); color: #8fb4ff; }
   .layer-row .ltype-propio { background: rgba(255, 255, 255, 0.1); color: var(--text-dim); }
   .layer-row .ltype-wms { background: rgba(35, 201, 143, 0.2); color: #6fe3b9; cursor: default; }
-  .layer-row .lremove {
+  .layer-row .lorder {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    line-height: 0;
+  }
+  .layer-row .lorder-btn {
     background: none;
     border: none;
     color: var(--text-faint);
     cursor: pointer;
-    font-size: 15px;
-    line-height: 1;
-    padding: 2px 4px;
-    border-radius: 4px;
-    flex-shrink: 0;
+    font-size: 7px;
+    padding: 1px 3px;
+    border-radius: 3px;
     transition: color 0.1s ease, background 0.1s ease;
   }
-  .layer-row .lremove:hover { color: var(--danger); background: rgba(255, 95, 109, 0.12); }
-  .layer-row .lstyle {
+  .layer-row .lorder-btn:hover:not(:disabled) { color: var(--text); background: var(--panel-3); }
+  .layer-row .lorder-btn:disabled { opacity: 0.25; cursor: default; }
+  .layer-row .lremove, .layer-row .lstyle, .layer-row .lrename {
     background: none;
     border: none;
     color: var(--text-faint);
@@ -396,7 +422,29 @@
     flex-shrink: 0;
     transition: color 0.1s ease, background 0.1s ease;
   }
-  .layer-row .lstyle:hover { color: var(--text); background: var(--panel-3); }
+  .layer-row .lremove:hover { color: var(--danger); background: rgba(255, 95, 109, 0.12); }
+  .layer-row .lstyle:hover, .layer-row .lrename:hover { color: var(--text); background: var(--panel-3); }
+  .layer-row .lrow-opacity {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-left: 21px;
+  }
+  .layer-row .lopacity-icon { font-size: 10px; flex-shrink: 0; opacity: 0.7; }
+  .layer-row .lopacity {
+    flex: 1;
+    min-width: 0;
+    height: 3px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .layer-row .lopacity-val {
+    font-size: 10px;
+    color: var(--text-faint);
+    width: 30px;
+    text-align: right;
+    flex-shrink: 0;
+  }
 
   /* Simbología personalizada por capa */
   .style-color-input {
@@ -1501,8 +1549,15 @@ function clearMeasure() {
 let idCounter = 0;
 
 const FILE_COLORS = ['#4f8cff', '#ff5f6d', '#23c98f', '#f5a623', '#b967ff', '#00d4d4', '#ff8fc9', '#a8e05f', '#ff6b3d', '#5ecbf0'];
-let loadedFiles = []; // {id, name, color, visible}
+// {id, name, sourceName, color, visible, opacity, type, kind, ...}. "name" es
+// el nombre visible (editable con renombrar); "sourceName" es el nombre de
+// origen (archivo/capa WMS-WFS tal como se cargó) y nunca se toca al
+// renombrar — se conserva solo como referencia. El ORDEN del array es el
+// orden real de apilado en el mapa (índice 0 = capa más arriba); ver
+// reorderMapStacking().
+let loadedFiles = [];
 let fileIdCounter = 0;
+let selectedFileId = null; // capa resaltada en el panel (solo feedback visual, no afecta al mapa)
 
 // ---- Catálogo de servicios WMS/WFS preconfigurados ---------------------
 // Cada entrada es solo metadata + una URL — no ejecuta ningún fetch por sí
@@ -2351,7 +2406,7 @@ function nextFileColor() {
 // "kind" distingue entre capas vectoriales locales (KML/Shapefile/GeoJSON,
 // con features propias en allItems) y capas remotas (WMS, sin allItems).
 function registerFile(name, kind) {
-  const file = { id: fileIdCounter++, name, color: nextFileColor(), visible: true, type: 'propio', kind: kind || 'vector' };
+  const file = { id: fileIdCounter++, name, sourceName: name, color: nextFileColor(), visible: true, opacity: 1, type: 'propio', kind: kind || 'vector' };
   loadedFiles.push(file);
   return file;
 }
@@ -2412,8 +2467,10 @@ function addWmsLayer(name, url, wmsLayerName, opts) {
   const file = {
     id: fileIdCounter++,
     name: displayName,
+    sourceName: normalizedLayer || displayName, // nombre técnico WMS (Name de GetCapabilities); el renombrado nunca lo toca
     color: opts.color || nextFileColor(),
     visible: opts.visible !== undefined ? opts.visible : true,
+    opacity: opts.opacity !== undefined ? opts.opacity : 1,
     type: 'propio',
     kind: 'wms',
     wmsUrl: normalizedUrl,
@@ -2425,6 +2482,7 @@ function addWmsLayer(name, url, wmsLayerName, opts) {
     format: 'image/png',
     transparent: true,
     version: '1.1.1',
+    opacity: file.opacity,
     attribution: displayName
   });
 
@@ -3945,13 +4003,22 @@ document.getElementById('styleResetBtn').addEventListener('click', () => {
 });
 
 // Reconstruye una capa a partir de los datos guardados en un visor exportado,
-// preservando color/tipo/visibilidad originales (no se re-asignan).
+// preservando color/tipo/visibilidad/opacidad/nombre (renombrado incluido)
+// originales — no se re-asignan. El ORDEN de EXPORTED_LAYERS (ver
+// exportViewer) es el orden real de loadedFiles al exportar, y como cada
+// restoreLayer() hace push() en ese mismo orden y reorderMapStacking() se
+// llama después desde refreshAll(), el apilado en el mapa queda igual al
+// que tenía el visor original, incluida cualquier capa reordenada a mano.
 function restoreLayer(def) {
   if (def.format === 'wms') {
-    addWmsLayer(def.name, def.wmsUrl, def.wmsLayerName, { visible: def.visible, color: def.color, skipDuplicateCheck: true });
+    addWmsLayer(def.name, def.wmsUrl, def.wmsLayerName, { visible: def.visible, color: def.color, opacity: def.opacity, skipDuplicateCheck: true });
     return;
   }
-  const file = { id: fileIdCounter++, name: def.name, color: def.color, visible: def.visible, type: def.type, kind: 'vector' };
+  const file = {
+    id: fileIdCounter++, name: def.name, sourceName: def.sourceName || def.name,
+    color: def.color, visible: def.visible, opacity: def.opacity !== undefined ? def.opacity : 1,
+    type: def.type, kind: 'vector'
+  };
   loadedFiles.push(file);
   if (def.format === 'geojson') {
     file.sourceGeoJSON = def.geo;
@@ -3977,14 +4044,19 @@ function exportViewer() {
     toast('No se pudo generar el archivo: falta la plantilla base');
     return;
   }
+  // El orden de este array es loadedFiles.map() tal cual está en memoria —
+  // ya incluye cualquier reordenamiento hecho a mano (ver moveFile) — y
+  // restoreLayer() lo respeta al reconstruir, así el apilado sobrevive a
+  // exportar/restaurar igual que nombre/opacidad/visibilidad.
   const layersData = loadedFiles.map(f => {
+    const opacity = f.opacity !== undefined ? f.opacity : 1;
     if (f.kind === 'wms') {
-      return { name: f.name, type: f.type, color: f.color, visible: f.visible, format: 'wms', wmsUrl: f.wmsUrl, wmsLayerName: f.wmsLayerName };
+      return { name: f.name, sourceName: f.sourceName, type: f.type, color: f.color, visible: f.visible, opacity, format: 'wms', wmsUrl: f.wmsUrl, wmsLayerName: f.wmsLayerName };
     }
     if (f.sourceGeoJSON) {
-      return { name: f.name, type: f.type, color: f.color, visible: f.visible, format: 'geojson', geo: f.sourceGeoJSON, style: f.style || null };
+      return { name: f.name, sourceName: f.sourceName, type: f.type, color: f.color, visible: f.visible, opacity, format: 'geojson', geo: f.sourceGeoJSON, style: f.style || null };
     }
-    return { name: f.name, type: f.type, color: f.color, visible: f.visible, format: 'kml', kml: f.kmlText || '', style: f.style || null };
+    return { name: f.name, sourceName: f.sourceName, type: f.type, color: f.color, visible: f.visible, opacity, format: 'kml', kml: f.kmlText || '', style: f.style || null };
   });
 
   // Escapamos la barra del cierre de <script> para que el navegador no corte
@@ -4150,6 +4222,130 @@ function applyFileStyle(file) {
   });
 }
 
+// ---- Opacidad rápida de capa (gestión de capas) ------------------------
+// Distinta de la simbología (file.style: fillOpacity/strokeOpacity por
+// separado, ver arriba): esto es un atenuador general de la capa completa,
+// aplicado como opacidad CSS sobre el <path>/<icon> ya renderizado en vez
+// de sobre las opciones fillOpacity/opacity de Leaflet — así no pisa ni
+// necesita conocer los valores que ya puso la simbología (o el color por
+// estado por defecto), solo atenúa visualmente el resultado ya compuesto.
+// Leaflet crea un <path> nuevo cada vez que un layer vuelve a agregarse al
+// mapa (SVG._initPath), así que esta función se re-llama también al
+// mostrar una capa oculta (toggleFileVisibility) y al reconstruir el árbol
+// (refreshAll), no solo cuando se mueve el slider.
+function applyLayerOpacityRecursive(layer, opacity) {
+  if (layer._path) layer._path.style.opacity = opacity;
+  if (layer._icon) layer._icon.style.opacity = opacity;
+  if (typeof layer.eachLayer === 'function') layer.eachLayer(sub => applyLayerOpacityRecursive(sub, opacity));
+}
+
+function applyFileOpacity(file) {
+  const opacity = file.opacity !== undefined ? file.opacity : 1;
+  if (file.kind === 'wms') {
+    if (file.wmsLayer && typeof file.wmsLayer.setOpacity === 'function') file.wmsLayer.setOpacity(opacity);
+    return;
+  }
+  allItems.filter(i => i.fileId === file.id).forEach(item => applyLayerOpacityRecursive(item.layer, opacity));
+}
+
+// ---- Orden de apilado de capas ------------------------------------------
+// bringToFront() es de L.Path (Polygon/Polyline/CircleMarker); L.LayerGroup
+// (usado para MultiGeometry/GeometryCollection, ver applyLeafletStyle más
+// arriba) no lo tiene, así que se recorre recursivamente igual que ahí.
+function bringToFrontRecursive(layer) {
+  if (typeof layer.bringToFront === 'function') layer.bringToFront();
+  if (typeof layer.eachLayer === 'function') layer.eachLayer(sub => bringToFrontRecursive(sub));
+}
+
+// El índice 0 de loadedFiles es la capa "de arriba" (ver comentario junto a
+// su declaración). Para vectoriales no hay un z-index real: se simula
+// llevando cada capa al frente del <svg>, de atrás hacia adelante, así la
+// última llamada (índice 0) queda físicamente al final del DOM = arriba.
+// Para WMS sí hay zIndex real de Leaflet (capas ráster, pane aparte).
+function reorderMapStacking() {
+  for (let i = loadedFiles.length - 1; i >= 0; i--) {
+    const file = loadedFiles[i];
+    if (file.kind === 'wms') continue;
+    allItems.filter(it => it.fileId === file.id).forEach(it => bringToFrontRecursive(it.layer));
+  }
+  const wmsFiles = loadedFiles.filter(f => f.kind === 'wms');
+  wmsFiles.forEach((f, i) => {
+    if (f.wmsLayer && typeof f.wmsLayer.setZIndex === 'function') f.wmsLayer.setZIndex(wmsFiles.length - i);
+  });
+}
+
+// Sube/baja una capa contra su vecino del mismo grupo del panel (mismo
+// kind, y para vectoriales también mismo type propio/SEA) — son las únicas
+// capas que aparecen adyacentes en el panel, así que es el único
+// reordenamiento con feedback visual coherente en la lista.
+function moveFile(fileId, direction) {
+  const idx = loadedFiles.findIndex(f => f.id === fileId);
+  if (idx === -1) return;
+  const file = loadedFiles[idx];
+  const sameGroup = (f) => file.kind === 'wms' ? f.kind === 'wms' : (f.kind !== 'wms' && f.type === file.type);
+  let swapIdx = -1;
+  if (direction === 'up') {
+    for (let i = idx - 1; i >= 0; i--) { if (sameGroup(loadedFiles[i])) { swapIdx = i; break; } }
+  } else {
+    for (let i = idx + 1; i < loadedFiles.length; i++) { if (sameGroup(loadedFiles[i])) { swapIdx = i; break; } }
+  }
+  if (swapIdx === -1) return;
+  [loadedFiles[idx], loadedFiles[swapIdx]] = [loadedFiles[swapIdx], loadedFiles[idx]];
+  reorderMapStacking();
+  syncLayersUi();
+}
+
+// ---- Renombrar capa ------------------------------------------------------
+// Solo cambia file.name (etiqueta visible); file.sourceName —el nombre de
+// origen del archivo/capa WMS-WFS— nunca se toca, así siempre queda una
+// referencia de dónde salió la capa aunque el usuario la haya renombrado.
+function renameFile(fileId, newName) {
+  const file = loadedFiles.find(f => f.id === fileId);
+  const trimmed = (newName || '').trim();
+  if (!file || !trimmed) return;
+  file.name = trimmed;
+  syncLayersUi();
+}
+
+function startRenameFile(fileId) {
+  const nameEl = document.querySelector(`.layer-row[data-file-id="${fileId}"] .lname`);
+  const file = loadedFiles.find(f => f.id === fileId);
+  if (!nameEl || !file) return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'lname-edit';
+  input.value = file.name;
+  input.title = `Nombre de origen: ${file.sourceName}`;
+  nameEl.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const commit = () => {
+    if (done) return;
+    done = true;
+    renameFile(fileId, input.value);
+  };
+  const cancel = () => {
+    if (done) return;
+    done = true;
+    renderLayersPanel();
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', commit);
+}
+
+// Refresco liviano para acciones de gestión de capas (renombrar, reordenar)
+// que no deben re-encuadrar el mapa como hace refreshAll() — solo repinta
+// panel/árbol y, si hay una sola capa, el nombre de archivo del header.
+function syncLayersUi() {
+  renderLayersPanel();
+  renderTree();
+  if (loadedFiles.length === 1) document.getElementById('filename').textContent = loadedFiles[0].name;
+}
+
 let styleModalFileId = null;
 
 function defaultStyleFor(file) {
@@ -4244,6 +4440,9 @@ function toggleFileVisibility(fileId, visible) {
     if (visible) layerGroup.addLayer(i.layer);
     else layerGroup.removeLayer(i.layer);
   });
+  // Volver a mostrarla crea un <path> nuevo (ver applyLayerOpacityRecursive):
+  // sin esto, la opacidad rápida se perdería cada vez que se oculta/muestra.
+  if (visible) applyFileOpacity(file);
 }
 
 function refreshAll() {
@@ -4260,6 +4459,11 @@ function refreshAll() {
 
   renderLayersPanel();
   renderTree();
+  // renderTree() ya (re)agregó los items visibles al layerGroup — recién acá
+  // existen sus <path> en el DOM, así que la opacidad rápida y el apilado
+  // por orden de capas se reaplican después, no antes.
+  loadedFiles.forEach(f => applyFileOpacity(f));
+  reorderMapStacking();
   renderStats();
   renderStatusChart();
   renderRegionChart();
@@ -4297,16 +4501,45 @@ function clearAll() {
   refreshAll();
 }
 
-function buildLayerRow(file) {
+// Botones ▲▼: se deshabilitan en los extremos de cada grupo (isFirst/isLast,
+// calculados por renderLayersPanel sobre el mismo bucket propio/SEA/WMS que
+// se muestra junto — moveFile() usa exactamente el mismo criterio de grupo).
+function buildLayerOrderButtons(isFirst, isLast) {
+  return `
+    <div class="lorder">
+      <button class="lorder-btn lup" title="Subir capa" ${isFirst ? 'disabled' : ''}>▲</button>
+      <button class="lorder-btn ldown" title="Bajar capa" ${isLast ? 'disabled' : ''}>▼</button>
+    </div>
+  `;
+}
+
+function buildLayerOpacityRow(file) {
+  const opacity = file.opacity !== undefined ? file.opacity : 1;
+  const pct = Math.round(opacity * 100);
+  return `
+    <div class="lrow-opacity">
+      <span class="lopacity-icon" title="Opacidad de la capa">🎚️</span>
+      <input type="range" class="lopacity" min="0" max="1" step="0.05" value="${opacity}" title="Opacidad: ${pct}%" />
+      <span class="lopacity-val">${pct}%</span>
+    </div>
+  `;
+}
+
+function buildLayerRow(file, isFirst, isLast) {
+  const selectedCls = file.id === selectedFileId ? ' selected' : '';
   if (file.kind === 'wms') {
     return `
-      <div class="layer-row" data-file-id="${file.id}">
-        <input type="checkbox" class="lvis" ${file.visible ? 'checked' : ''} />
-        <span class="swatch" style="background:${file.color};" title="Capa WMS remota"></span>
-        <span class="lname" title="${escapeHtml(file.name)} — ${escapeHtml(file.wmsUrl)}">${escapeHtml(file.name)}</span>
-        <span class="ltype ltype-wms" title="Capa WMS remota (${escapeHtml(file.wmsLayerName)})">WMS</span>
-        <span class="lcount">remota</span>
-        <button class="lremove" title="Quitar capa">×</button>
+      <div class="layer-row${selectedCls}" data-file-id="${file.id}">
+        <div class="lrow-top">
+          <input type="checkbox" class="lvis" title="Mostrar/ocultar capa" ${file.visible ? 'checked' : ''} />
+          <span class="swatch" style="background:${file.color};" title="Capa WMS remota"></span>
+          <span class="lname" title="${escapeHtml(file.name)} — ${escapeHtml(file.wmsUrl)}">${escapeHtml(file.name)}</span>
+          <span class="ltype ltype-wms" title="Capa WMS remota (${escapeHtml(file.wmsLayerName)})">WMS</span>
+          ${buildLayerOrderButtons(isFirst, isLast)}
+          <button class="lrename" title="Renombrar capa">✏️</button>
+          <button class="lremove" title="Quitar capa">🗑️</button>
+        </div>
+        ${buildLayerOpacityRow(file)}
       </div>
     `;
   }
@@ -4321,16 +4554,27 @@ function buildLayerRow(file) {
       : `background:${file.color};`;
   const swatchTitle = file.style ? 'Color de capa (personalizado)' : (hasEstado ? 'Colores por estado del proyecto' : 'Color de capa');
   return `
-    <div class="layer-row" data-file-id="${file.id}">
-      <input type="checkbox" class="lvis" ${file.visible ? 'checked' : ''} />
-      <span class="swatch" style="${swatchStyle}" title="${swatchTitle}"></span>
-      <span class="lname" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-      <button class="ltype ltype-${file.type}" title="Clic para cambiar de grupo">${file.type === 'sea' ? 'SEA' : 'Propio'}</button>
-      <span class="lcount">${fileItems.length}</span>
-      <button class="lstyle" title="Editar simbología (color, borde, opacidad)">🎨</button>
-      <button class="lremove" title="Quitar capa">×</button>
+    <div class="layer-row${selectedCls}" data-file-id="${file.id}">
+      <div class="lrow-top">
+        <input type="checkbox" class="lvis" title="Mostrar/ocultar capa" ${file.visible ? 'checked' : ''} />
+        <span class="swatch" style="${swatchStyle}" title="${swatchTitle}"></span>
+        <span class="lname" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
+        <button class="ltype ltype-${file.type}" title="Clic para cambiar de grupo">${file.type === 'sea' ? 'SEA' : 'Propio'}</button>
+        <span class="lcount">${fileItems.length}</span>
+        ${buildLayerOrderButtons(isFirst, isLast)}
+        <button class="lrename" title="Renombrar capa">✏️</button>
+        <button class="lstyle" title="Editar simbología (color, borde, opacidad)">🎨</button>
+        <button class="lremove" title="Quitar capa">🗑️</button>
+      </div>
+      ${buildLayerOpacityRow(file)}
     </div>
   `;
+}
+
+// Arma las filas de un grupo (mismo bucket que usa moveFile()) marcando
+// isFirst/isLast de cada una para los botones ▲▼.
+function buildLayerGroupRows(files) {
+  return files.map((file, idx) => buildLayerRow(file, idx === 0, idx === files.length - 1)).join('');
 }
 
 function renderLayersPanel() {
@@ -4347,15 +4591,15 @@ function renderLayersPanel() {
   let html = '';
   if (propioFiles.length) {
     html += `<div class="layers-title">Mis proyectos (${propioFiles.length})</div>`;
-    html += propioFiles.map(buildLayerRow).join('');
+    html += buildLayerGroupRows(propioFiles);
   }
   if (seaFiles.length) {
     html += `<div class="layers-title" style="margin-top:${propioFiles.length ? '10px' : '0'};">Proyectos SEA cercanos (${seaFiles.length})</div>`;
-    html += seaFiles.map(buildLayerRow).join('');
+    html += buildLayerGroupRows(seaFiles);
   }
   if (wmsFiles.length) {
     html += `<div class="layers-title" style="margin-top:${(propioFiles.length || seaFiles.length) ? '10px' : '0'};">Capas WMS (${wmsFiles.length})</div>`;
-    html += wmsFiles.map(buildLayerRow).join('');
+    html += buildLayerGroupRows(wmsFiles);
   }
   panel.innerHTML = html;
 
@@ -4364,12 +4608,34 @@ function renderLayersPanel() {
     const file = loadedFiles.find(f => f.id === fileId);
     row.querySelector('.lvis').addEventListener('change', (e) => toggleFileVisibility(fileId, e.target.checked));
     row.querySelector('.lremove').addEventListener('click', () => removeFile(fileId));
+    row.querySelector('.lrename').addEventListener('click', () => startRenameFile(fileId));
+    const upBtn = row.querySelector('.lup');
+    const downBtn = row.querySelector('.ldown');
+    if (upBtn) upBtn.addEventListener('click', () => moveFile(fileId, 'up'));
+    if (downBtn) downBtn.addEventListener('click', () => moveFile(fileId, 'down'));
+    row.querySelector('.lopacity').addEventListener('input', (e) => {
+      if (!file) return;
+      const val = Number(e.target.value);
+      file.opacity = val;
+      applyFileOpacity(file);
+      row.querySelector('.lopacity-val').textContent = `${Math.round(val * 100)}%`;
+    });
     if (file && file.kind !== 'wms') {
       row.querySelector('.ltype').addEventListener('click', () => {
         setFileType(fileId, file.type === 'sea' ? 'propio' : 'sea');
       });
       row.querySelector('.lstyle').addEventListener('click', () => openStyleModal(fileId));
     }
+    // Feedback visual de capa activa/seleccionada: clic en cualquier parte
+    // de la fila que no sea un control interactivo. Selección exclusiva
+    // (una sola capa resaltada a la vez), solo visual — no toca el mapa.
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('input, button')) return;
+      const wasSelected = row.classList.contains('selected');
+      panel.querySelectorAll('.layer-row.selected').forEach(r => r.classList.remove('selected'));
+      selectedFileId = wasSelected ? null : fileId;
+      if (!wasSelected) row.classList.add('selected');
+    });
   });
 }
 
