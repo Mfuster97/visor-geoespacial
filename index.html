@@ -722,6 +722,13 @@
     white-space: nowrap;
   }
   .wms-layer-empty { padding: 12px 10px; font-size: 12.5px; color: var(--text-dim); text-align: center; }
+  .wms-layer-more {
+    padding: 10px;
+    text-align: center;
+    border-top: 1px solid var(--border);
+  }
+  .wms-layer-more-text { font-size: 11.5px; color: var(--text-dim); margin-bottom: 6px; }
+  .wms-layer-more-btn { font-size: 12px; padding: 6px 14px; }
 
   /* Catálogo de servicios WMS/WFS preconfigurados */
   #catalogModal .modal-box { width: min(560px, 100%); max-height: 85vh; display: flex; flex-direction: column; }
@@ -2494,15 +2501,39 @@ let wmsDiscoveredLayers = [];
 let wmsSelectedLayerName = null;
 let pendingWmsBounds = null;
 
+// Cuántas filas se pintan por "página" — el límite visual arranca en este
+// valor y crece de a uno de estos con cada click en "Mostrar más" (ver
+// wmsListLimit). No tiene nada que ver con cuántas capas devuelve el
+// servidor: parseWmsCapabilities()/wmsDiscoveredLayers siempre tienen el
+// total completo, esto solo acota cuántos <div> se insertan en el DOM.
+const WMS_LIST_PAGE_SIZE = 100;
+let wmsListLimit = WMS_LIST_PAGE_SIZE;
+// Último filtro para el que se calculó wmsListLimit — permite distinguir
+// "el usuario cambió el texto de filtro" (reinicia el límite a 100) de
+// "se volvió a renderizar con el mismo filtro" (por seleccionar una capa,
+// o por el propio botón "Mostrar más", que no deben reiniciarlo).
+let wmsListLimitFilterText = null;
+
 // Pinta en #wmsLayerList las capas de "layers" que coincidan con filterText
-// (substring case-insensitive sobre name/title/abstract). No vuelve a pedir
-// datos al servidor — solo filtra el array ya obtenido por fetchWmsCapabilities.
-// Todo el texto proveniente del servicio WMS pasa por escapeHtml() antes de
-// insertarse, nunca se vuelca crudo con innerHTML (name/title/abstract son
-// datos de un servidor externo, no confiables).
+// (substring case-insensitive sobre name/title/abstract) — el filtro busca
+// siempre sobre el array completo, nunca sobre el subconjunto visible. No
+// vuelve a pedir datos al servidor — solo filtra el array ya obtenido por
+// fetchWmsCapabilities(). Todo el texto proveniente del servicio WMS pasa
+// por escapeHtml() antes de insertarse, nunca se vuelca crudo con innerHTML
+// (name/title/abstract son datos de un servidor externo, no confiables).
 function renderWmsLayerList(layers, filterText) {
   const listEl = document.getElementById('wmsLayerList');
   const norm = (filterText || '').trim().toLowerCase();
+
+  // Cambió el texto de filtro (incluido "se limpió a vacío") -> volver a
+  // mostrar solo la primera página. Si es el mismo filtro que la vez
+  // anterior (re-render por selección, o por "Mostrar más"), se respeta
+  // wmsListLimit tal como esté.
+  if (norm !== wmsListLimitFilterText) {
+    wmsListLimit = WMS_LIST_PAGE_SIZE;
+    wmsListLimitFilterText = norm;
+  }
+
   const filtered = norm
     ? layers.filter(layer => {
         const haystack = `${layer.name || ''} ${layer.title || ''} ${layer.abstract || ''}`.toLowerCase();
@@ -2515,8 +2546,7 @@ function renderWmsLayerList(layers, filterText) {
     return;
   }
 
-  const LIMIT = 200;
-  const visible = filtered.slice(0, LIMIT);
+  const visible = filtered.slice(0, wmsListLimit);
 
   const rows = visible.map(layer => {
     const abstractHtml = layer.abstract
@@ -2532,11 +2562,18 @@ function renderWmsLayerList(layers, filterText) {
     `;
   }).join('');
 
-  const truncatedNote = filtered.length > LIMIT
-    ? `<div class="wms-layer-empty">Mostrando ${LIMIT} de ${filtered.length} — refiná el filtro para ver más.</div>`
+  // Botón "Mostrar más" solo si queda algo fuera de la página actual —
+  // desaparece solo cuando visible.length ya cubre todo "filtered".
+  const moreHtml = filtered.length > visible.length
+    ? `
+      <div class="wms-layer-more">
+        <div class="wms-layer-more-text">Mostrando ${visible.length} de ${filtered.length} capas</div>
+        <button type="button" class="secondary wms-layer-more-btn">➕ Mostrar ${WMS_LIST_PAGE_SIZE} más</button>
+      </div>
+    `
     : '';
 
-  listEl.innerHTML = rows + truncatedNote;
+  listEl.innerHTML = rows + moreHtml;
 
   // El orden de .wms-layer-item en el DOM coincide con "visible" — se
   // adjuntan los listeners después de insertar el HTML (evita mezclar
@@ -2545,6 +2582,15 @@ function renderWmsLayerList(layers, filterText) {
   rowEls.forEach((rowEl, i) => {
     rowEl.addEventListener('click', () => selectWmsLayer(visible[i]));
   });
+
+  const moreBtn = listEl.querySelector('.wms-layer-more-btn');
+  if (moreBtn) {
+    moreBtn.addEventListener('click', () => {
+      wmsListLimit += WMS_LIST_PAGE_SIZE;
+      // Mismo filtro que ya estaba aplicado -> el guard de arriba no lo reinicia.
+      renderWmsLayerList(wmsDiscoveredLayers, document.getElementById('wmsLayerFilterInput').value);
+    });
+  }
 }
 
 // Se llama al hacer clic en una capa de la lista de resultados: rellena los
@@ -3263,6 +3309,8 @@ function resetWmsDiscovery() {
   wmsDiscoveredLayers = [];
   wmsSelectedLayerName = null;
   pendingWmsBounds = null;
+  wmsListLimit = WMS_LIST_PAGE_SIZE;
+  wmsListLimitFilterText = null;
   document.getElementById('wmsDiscoverStatus').textContent = '';
   document.getElementById('wmsLayerFilterInput').value = '';
   document.getElementById('wmsLayerFilterWrap').hidden = true;
