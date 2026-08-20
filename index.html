@@ -141,6 +141,22 @@
   button.secondary.active { background: var(--accent-soft); color: var(--accent-hover); border-color: var(--accent); }
   button.secondary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
+  /* Toolbar compacta tipo visor GIS: la mayoría de las acciones secundarias
+     son solo ícono + tooltip (title) en vez de ícono+texto — así entra
+     mucho más en el mismo ancho y el toolbar deja de competir visualmente
+     con el mapa. "Agregar capa" es la única acción primaria y se mantiene
+     con etiqueta (es el call-to-action principal del visor). */
+  button.icon-btn {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+
   .snap-toggle {
     display: flex;
     align-items: center;
@@ -344,7 +360,29 @@
     align-items: center;
     gap: 6px;
   }
-  .layer-row input[type="checkbox"] { flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
+  /* Visibilidad como ícono de ojo (estética visor GIS) en vez de checkbox
+     nativo: mismo <input type="checkbox"> y mismo evento "change" que ya
+     escucha renderLayersPanel — appearance:none solo cambia cómo se pinta. */
+  .layer-row .lvis {
+    appearance: none;
+    -webkit-appearance: none;
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin: 0;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .layer-row .lvis::before { content: '🚫'; font-size: 10px; opacity: 0.55; filter: grayscale(1); }
+  .layer-row .lvis:checked { background: var(--accent-soft); border-color: var(--accent); }
+  .layer-row .lvis:checked::before { content: '👁️'; opacity: 1; filter: none; }
+  .layer-row .lvis:hover { border-color: var(--text-faint); }
   .layer-row .swatch {
     width: 11px;
     height: 11px;
@@ -767,7 +805,18 @@
     animation: modal-pop 0.16s ease;
   }
   .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border-soft); }
-  .modal-header h2 { font-size: 15.5px; font-weight: 700; margin: 0; letter-spacing: 0.1px; }
+  .modal-header h2 { display: flex; align-items: center; gap: 10px; font-size: 15.5px; font-weight: 700; margin: 0; letter-spacing: 0.1px; }
+  .modal-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    flex-shrink: 0;
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    font-size: 15px;
+  }
   .modal-close {
     background: none;
     border: none;
@@ -1024,8 +1073,8 @@
   <div class="toolbar-spacer"></div>
 
   <div class="toolbar-group">
-    <button id="measurebtn" class="secondary">📏 Medir</button>
-    <button id="elevationbtn" class="secondary">⛰️ Elevación</button>
+    <button id="measurebtn" class="secondary icon-btn" title="Medir distancia / área">📏</button>
+    <button id="elevationbtn" class="secondary icon-btn" title="Perfil de elevación">⛰️</button>
     <label id="snaplabel" class="snap-toggle" title="Ajustar los puntos de medición a vértices y líneas de las capas cargadas">
       <input type="checkbox" id="snaptoggle" checked /> Snap
     </label>
@@ -1036,29 +1085,29 @@
       <option value="mi">Millas</option>
       <option value="ft">Pies</option>
     </select>
-    <button id="measureclearbtn" class="secondary">Borrar medición</button>
+    <button id="measureclearbtn" class="secondary icon-btn" title="Borrar medición actual">🧹</button>
   </div>
 
   <div class="toolbar-group">
-    <button id="clearbtn" class="secondary">Limpiar todo</button>
-    <button id="exportbtn" class="secondary">💾 Guardar y compartir</button>
-    <button id="convertbtn" class="secondary">🔄 Convertir SHP⇄KMZ</button>
+    <button id="clearbtn" class="secondary icon-btn" title="Quitar todas las capas">🗑️</button>
+    <button id="exportbtn" class="secondary icon-btn" title="Guardar y compartir (exportar visor con las capas cargadas)">💾</button>
+    <button id="convertbtn" class="secondary icon-btn" title="Convertir KMZ ⇄ Shapefile">🔄</button>
   </div>
 
   <div class="toolbar-group">
-    <button id="wmsbtn" class="secondary">🛰️ + Capa WMS</button>
-    <button id="wfsbtn" class="secondary">🧩 + Capa WFS</button>
-    <button id="catalogbtn" class="secondary">🌐 Catálogo de servicios</button>
+    <button id="wmsbtn" class="secondary icon-btn" title="Agregar capa WMS">🛰️</button>
+    <button id="wfsbtn" class="secondary icon-btn" title="Agregar capa WFS">🧩</button>
+    <button id="catalogbtn" class="secondary icon-btn" title="Catálogo de servicios WMS/WFS">🌐</button>
   </div>
 
-  <button id="filebtn">Agregar capa</button>
+  <button id="filebtn" title="Agregar capa local (KMZ/KML/SHP/GeoJSON)">➕ Agregar capa</button>
   <input type="file" id="fileinput" accept=".kmz,.kml,.zip,.shp,.dbf,.shx,.prj,.geojson,.json" multiple />
 </header>
 
 <div id="convertModal" class="modal-overlay">
   <div class="modal-box">
     <div class="modal-header">
-      <h2>🔄 Convertir KMZ ⇄ Shapefile</h2>
+      <h2><span class="modal-icon">🔄</span> Convertir KMZ ⇄ Shapefile</h2>
       <button id="convertModalClose" class="modal-close" aria-label="Cerrar">×</button>
     </div>
     <p class="modal-hint">
@@ -1075,7 +1124,7 @@
 <div id="wmsModal" class="modal-overlay">
   <div class="modal-box">
     <div class="modal-header">
-      <h2>🛰️ Agregar capa WMS</h2>
+      <h2><span class="modal-icon">🛰️</span> Agregar capa WMS</h2>
       <button id="wmsModalClose" class="modal-close" aria-label="Cerrar">×</button>
     </div>
     <p class="modal-hint">
@@ -1107,7 +1156,7 @@
 <div id="wfsModal" class="modal-overlay">
   <div class="modal-box">
     <div class="modal-header">
-      <h2>🧩 Agregar capa WFS</h2>
+      <h2><span class="modal-icon">🧩</span> Agregar capa WFS</h2>
       <button id="wfsModalClose" class="modal-close" aria-label="Cerrar">×</button>
     </div>
     <p class="modal-hint">
@@ -1142,7 +1191,7 @@
 <div id="catalogModal" class="modal-overlay">
   <div class="modal-box">
     <div class="modal-header">
-      <h2>🌐 Catálogo de servicios</h2>
+      <h2><span class="modal-icon">🌐</span> Catálogo de servicios</h2>
       <button id="catalogModalClose" class="modal-close" aria-label="Cerrar">×</button>
     </div>
     <p class="modal-hint">
@@ -1175,7 +1224,7 @@
 <div id="styleModal" class="modal-overlay">
   <div class="modal-box">
     <div class="modal-header">
-      <h2>🎨 Simbología de capa</h2>
+      <h2><span class="modal-icon">🎨</span> Simbología de capa</h2>
       <button id="styleModalClose" class="modal-close" aria-label="Cerrar">×</button>
     </div>
     <p class="modal-hint" id="styleModalLayerName"></p>
@@ -1522,7 +1571,8 @@ function startMeasuring() {
   map.on('mousemove', onMeasureMouseMove);
   const btn = document.getElementById('measurebtn');
   btn.classList.add('active');
-  btn.textContent = '✕ Terminar medición';
+  btn.textContent = '✕';
+  btn.title = 'Terminar medición';
 }
 
 function stopMeasuring() {
@@ -1537,7 +1587,8 @@ function stopMeasuring() {
   updateSnapMarker(null);
   const btn = document.getElementById('measurebtn');
   btn.classList.remove('active');
-  btn.textContent = '📏 Medir';
+  btn.textContent = '📏';
+  btn.title = 'Medir distancia / área';
   updateMeasurePanel();
 }
 
@@ -4927,7 +4978,8 @@ function startElevation() {
   map.on('click', onElevationClick);
   const btn = document.getElementById('elevationbtn');
   btn.classList.add('active');
-  btn.textContent = '✕ Terminar elevación';
+  btn.textContent = '✕';
+  btn.title = 'Terminar elevación';
 }
 
 function stopElevation() {
@@ -4936,7 +4988,8 @@ function stopElevation() {
   map.off('click', onElevationClick);
   const btn = document.getElementById('elevationbtn');
   btn.classList.remove('active');
-  btn.textContent = '⛰️ Elevación';
+  btn.textContent = '⛰️';
+  btn.title = 'Perfil de elevación';
 }
 
 document.getElementById('elevationbtn').addEventListener('click', () => {
