@@ -997,6 +997,9 @@
     <span class="modal-field-label">Categorías</span>
     <div id="catalogCategoryFilter" class="catalog-chip-row"></div>
 
+    <span class="modal-field-label">🏛️ Organismo</span>
+    <div id="catalogOrganismFilter" class="catalog-chip-row"></div>
+
     <div id="catalogResultCount" class="catalog-result-count"></div>
     <div id="catalogList" class="catalog-list"></div>
   </div>
@@ -3540,6 +3543,7 @@ const CATALOG_CATEGORY_CHIPS = [
 
 let catalogTypeState = '';
 let catalogCategoryState = null; // null = todas, o { field, value }
+let catalogOrganismState = null; // null = todos, o el string exacto de organization
 
 // ---- Favoritos y "usados recientemente" (localStorage) -----------------
 // Solo guardan ids de SERVICE_CATALOG (strings propias, nunca texto de un
@@ -3611,6 +3615,32 @@ function renderCatalogCategoryChips() {
   });
 }
 
+// A diferencia de CATALOG_CATEGORY_CHIPS (taxonomía curada, fija), los
+// organismos se calculan a partir de los datos reales de SERVICE_CATALOG:
+// con un catálogo pensado para crecer a decenas/cientos de entradas, una
+// lista de organismos escrita a mano quedaría desactualizada apenas se
+// agregue un servicio nuevo. Sumar un servicio a SERVICE_CATALOG alcanza
+// para que aparezca acá — no hay que tocar esta función.
+function renderCatalogOrganismChips() {
+  const wrap = document.getElementById('catalogOrganismFilter');
+  const organisms = Array.from(new Set(SERVICE_CATALOG.map(s => s.organization))).sort((a, b) => a.localeCompare(b, 'es'));
+
+  const allBtn = `<button type="button" class="secondary catalog-chip${catalogOrganismState ? '' : ' active'}" data-org="">Todos</button>`;
+  const chipBtns = organisms.map(org => {
+    const active = catalogOrganismState === org;
+    return `<button type="button" class="secondary catalog-chip${active ? ' active' : ''}" data-org="${escapeHtml(org)}">${escapeHtml(org)}</button>`;
+  }).join('');
+  wrap.innerHTML = allBtn + chipBtns;
+
+  wrap.querySelectorAll('.catalog-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      catalogOrganismState = btn.dataset.org || null;
+      renderCatalogOrganismChips();
+      renderCatalogList();
+    });
+  });
+}
+
 // Favoritos primero, luego usados recientemente (más reciente primero),
 // luego el resto en su orden original de SERVICE_CATALOG. Array.sort() es
 // estable (garantizado desde ES2019), así que dentro de cada grupo no hace
@@ -3636,6 +3666,7 @@ function renderCatalogList() {
   const filtered = SERVICE_CATALOG.filter(s => {
     if (catalogTypeState && s.type !== catalogTypeState) return false;
     if (catalogCategoryState && s[catalogCategoryState.field] !== catalogCategoryState.value) return false;
+    if (catalogOrganismState && s.organization !== catalogOrganismState) return false;
     if (query) {
       const haystack = `${s.name} ${s.organization} ${s.category} ${s.description}`.toLowerCase();
       if (!haystack.includes(query)) return false;
@@ -3710,10 +3741,12 @@ document.getElementById('catalogbtn').addEventListener('click', () => {
   document.getElementById('catalogSearchInput').value = '';
   catalogTypeState = '';
   catalogCategoryState = null;
+  catalogOrganismState = null;
   document.querySelectorAll('#catalogTypeFilter .catalog-chip').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.type === '');
   });
   renderCatalogCategoryChips();
+  renderCatalogOrganismChips();
   renderCatalogList();
 });
 document.getElementById('catalogModalClose').addEventListener('click', () => {
