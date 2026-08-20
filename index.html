@@ -1643,6 +1643,35 @@ const SERVICE_CATALOG = [
     country: 'Chile',
     coverage: 'Regional (Metropolitana)'
   }
+  // Ronda de investigación adicional (sin resultados nuevos que agregar —
+  // se deja documentado para no repetir el trabajo en el futuro):
+  // - SERNAGEOMIN: los 3 hosts conocidos (ogc.sernageomin.cl,
+  //   portalgeomin.sernageomin.cl, sdngsig.sernageomin.cl) no resuelven DNS
+  //   o no aceptan conexión desde este entorno — igual que en la
+  //   investigación anterior, sin cambios.
+  // - IGM (Instituto Geográfico Militar): www.igm.cl devuelve HTTP 403
+  //   (bloqueo WAF/bot) tanto en la raíz como en /geoserver; no se encontró
+  //   ningún workspace propio en el GeoServer compartido de geoportal.cl
+  //   pese a probar >15 nombres plausibles (Toponimos, VerticesGeodesicos,
+  //   EstacionesActivas, RedGeodesica, etc.).
+  // - SHOA: www.shoa.cl devuelve HTTP 403 en /geoserver; no se encontró
+  //   ningún servicio OGC público (cartas náuticas se distribuyen como
+  //   archivos, no como WMS/WFS).
+  // - SENAPRED/DIRECTEMAR: sin infraestructura OGC pública encontrada.
+  // - SUBDERE (ide.subdere.gov.cl): sitio WordPress activo, pero sus
+  //   visores (despliegue-territorial-regional, etc.) cargan un mapa vía
+  //   JS/SPA sin exponer la URL del servicio en el HTML estático — no se
+  //   pudo confirmar un endpoint sin adivinar.
+  // - Dirección Meteorológica de Chile: geonode.meteochile.gob.cl no
+  //   responde (timeout) desde este entorno.
+  // - INE: su ArcGIS Hub (geoine-ine-chile.opendata.arcgis.com) resuelve,
+  //   pero no se pudo ubicar el FeatureServer/MapServer real detrás sin
+  //   adivinar una URL.
+  // - MINAGRI/CIREN (esri.ciren.cl), MINVU (geoide.minvu.cl), MOP
+  //   (rest-sit.mop.gob.cl), SUBPESCA (geoportal.subpesca.cl) y Bienes
+  //   Nacionales (idembn.bienes.cl): re-verificados, siguen respondiendo
+  //   GetCapabilities válido pero sin header Access-Control-Allow-Origin —
+  //   mismo motivo de descarte que antes, sin cambios.
 ];
 
 function toast(msg) {
