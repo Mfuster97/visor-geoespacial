@@ -2628,7 +2628,13 @@ function addWmsLayer(name, url, wmsLayerName, opts) {
     type: 'propio',
     kind: 'wms',
     wmsUrl: normalizedUrl,
-    wmsLayerName: normalizedLayer
+    wmsLayerName: normalizedLayer,
+    // BoundingBox detectado por GetCapabilities (ver opts.bounds abajo), si lo
+    // hay — se guarda para poder reencuadrar la capa después (focusFile()),
+    // ya que una capa WMS no tiene geometrías propias en allItems.
+    bounds: (opts.bounds && [opts.bounds.south, opts.bounds.west, opts.bounds.north, opts.bounds.east].every(Number.isFinite))
+      ? opts.bounds
+      : null
   };
 
   const tileLayer = L.tileLayer.wms(normalizedUrl, {
@@ -2664,11 +2670,9 @@ function addWmsLayer(name, url, wmsLayerName, opts) {
   // Pascua a Chile continental); fitBounds() sin piso al menos deja siempre
   // visible el área real de la capa, aunque a esa escala una capa muy
   // detallada se vea chica — eso es inherente a WMS (raster), no un bug.
-  if (opts.bounds) {
-    const b = opts.bounds;
-    if ([b.south, b.west, b.north, b.east].every(Number.isFinite)) {
-      map.fitBounds([[b.south, b.west], [b.north, b.east]], { padding: [40, 40] });
-    }
+  if (file.bounds) {
+    const b = file.bounds;
+    map.fitBounds([[b.south, b.west], [b.north, b.east]], { padding: [40, 40] });
   }
 
   refreshAll();
@@ -4599,6 +4603,24 @@ function toggleFileVisibility(fileId, visible) {
   if (visible) applyFileOpacity(file);
 }
 
+// Junta los bounds reales (Leaflet) de un layer en "out", recursando en
+// grupos (MultiGeometry de KML, GeometryCollection de GeoJSON) — mismo
+// patrón defensivo que applyLeafletStyle/bringToFrontRecursive más arriba.
+// Reutilizado por refreshAll() (bounds de todo lo visible) y focusFile()
+// (bounds de una sola capa, para "llevarme a donde está").
+function collectLayerBounds(layer, out) {
+  if (layer.getBounds) out.push(layer.getBounds());
+  else if (layer.getLatLng) out.push(L.latLngBounds([layer.getLatLng(), layer.getLatLng()]));
+  else if (layer.getLayers) layer.getLayers().forEach(sub => collectLayerBounds(sub, out));
+}
+
+function combineBounds(boundsList) {
+  if (!boundsList.length) return null;
+  let combined = boundsList[0];
+  boundsList.slice(1).forEach(b => { combined = combined.extend(b); });
+  return combined;
+}
+
 function refreshAll() {
   snapChains = null; // las capas cambiaron: invalida el cache de puntos para snap
   const emptyEl = document.getElementById('empty');
@@ -4626,21 +4648,37 @@ function refreshAll() {
   allItems.forEach(i => {
     const file = loadedFiles.find(f => f.id === i.fileId);
     if (!file || !file.visible) return;
-    const l = i.layer;
-    if (l.getBounds) visibleBounds.push(l.getBounds());
-    else if (l.getLatLng) visibleBounds.push(L.latLngBounds([l.getLatLng(), l.getLatLng()]));
-    else if (l.getLayers) {
-      l.getLayers().forEach(sub => {
-        if (sub.getBounds) visibleBounds.push(sub.getBounds());
-        else if (sub.getLatLng) visibleBounds.push(L.latLngBounds([sub.getLatLng(), sub.getLatLng()]));
-      });
-    }
+    collectLayerBounds(i.layer, visibleBounds);
   });
-  if (visibleBounds.length) {
-    let combined = visibleBounds[0];
-    visibleBounds.slice(1).forEach(b => combined = combined.extend(b));
-    map.fitBounds(combined, { padding: [40, 40] });
+  const combined = combineBounds(visibleBounds);
+  if (combined) map.fitBounds(combined, { padding: [40, 40] });
+}
+
+// Centra/encuadra el mapa en toda la extensión de una capa — se dispara al
+// hacer clic en su fila del panel de capas (ver renderLayersPanel), fuera
+// de sus controles interactivos (checkbox, botones, slider de opacidad).
+// Encuadra aunque la capa esté oculta: el objetivo es "llevarme a donde
+// está", no depende de si se está mostrando en ese momento.
+function focusFile(fileId) {
+  const file = loadedFiles.find(f => f.id === fileId);
+  if (!file) return;
+  if (file.kind === 'wms') {
+    if (file.bounds) {
+      const b = file.bounds;
+      fitBoundsWithMinZoom([[b.south, b.west], [b.north, b.east]], { padding: [40, 40] });
+    } else {
+      toast('Esta capa WMS no informó su ubicación (BoundingBox) al agregarla.');
+    }
+  } else {
+    const bounds = [];
+    allItems.filter(i => i.fileId === fileId).forEach(i => collectLayerBounds(i.layer, bounds));
+    const combined = combineBounds(bounds);
+    if (combined) map.fitBounds(combined, { padding: [60, 60] });
+    else toast(`"${file.name}" no tiene geometrías para encuadrar.`);
   }
+  // En celular/tablet el panel tapa el mapa: al elegir una capa se cierra
+  // solo para que se vea dónde quedó el encuadre (mismo criterio que focusItem).
+  if (window.matchMedia('(max-width: 900px)').matches) toggleSidebar(false);
 }
 
 function clearAll() {
@@ -4780,15 +4818,16 @@ function renderLayersPanel() {
       });
       row.querySelector('.lstyle').addEventListener('click', () => openStyleModal(fileId));
     }
-    // Feedback visual de capa activa/seleccionada: clic en cualquier parte
-    // de la fila que no sea un control interactivo. Selección exclusiva
-    // (una sola capa resaltada a la vez), solo visual — no toca el mapa.
+    // Clic en cualquier parte de la fila que no sea un control interactivo:
+    // encuadra el mapa en la ubicación de la capa (focusFile) y la marca
+    // como seleccionada — mismo criterio que un ítem del árbol (focusItem),
+    // sin toggle: un segundo clic vuelve a encuadrar, no deselecciona.
     row.addEventListener('click', (e) => {
       if (e.target.closest('input, button')) return;
-      const wasSelected = row.classList.contains('selected');
       panel.querySelectorAll('.layer-row.selected').forEach(r => r.classList.remove('selected'));
-      selectedFileId = wasSelected ? null : fileId;
-      if (!wasSelected) row.classList.add('selected');
+      selectedFileId = fileId;
+      row.classList.add('selected');
+      focusFile(fileId);
     });
   });
 }
