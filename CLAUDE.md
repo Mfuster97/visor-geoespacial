@@ -22,7 +22,12 @@ Registration (`index.html`, guarded by `'serviceWorker' in navigator && window.i
 
 ### GPS
 
-`gpsBtn` (floating, next to the compass) toggles `navigator.geolocation.watchPosition` live tracking, same on/off button pattern as Medir/Elevación. A pulsing "blue dot" (`L.marker` with a `gps-dot-icon` divIcon) plus an `L.circle` sized to the reported accuracy track the position; the map only auto-centers on the *first* fix after pressing the button (`gpsFirstFix`), so panning around afterward doesn't get fought by every subsequent update. Pressing the button again calls `stopGps()`, which clears the watch and removes both layers — there's nothing to persist, so exportViewer/restoreLayer are untouched.
+`gpsBtn` (floating, next to the compass) drives `navigator.geolocation.watchPosition` live tracking through 3 states, same recenter/stop convention as Google Maps' location button — see the comment above `gpsWatchId` for the full state table:
+1. **Off**: click → `startGps()` (also warns via toast if `!window.isSecureContext`, since `watchPosition` silently fails outside https/localhost — most commonly when the app is opened via `file://`).
+2. **`following`** (solid-fill button): tracking is on and the map recenters on every fix (`map.panTo`, or `map.setView` with a zoom floor on the very first fix). Click → `stopGps()`.
+3. **`active` without `following`** (soft-tint button): the user dragged the map away from their position (detected via the map's `dragstart` event, which — unlike the `setView`/`panTo` calls this feature makes itself — only fires for a real user drag) so auto-recentering paused, but the watch and the "blue dot" (`L.marker` with a `gps-dot-icon` divIcon) + accuracy `L.circle` keep updating in the background. Click → `setGpsFollowing(true)` and jump to the last known fix, *without* restarting `watchPosition` — this is what makes "click takes me back to where I am" work without re-prompting for permission.
+
+There's nothing here to persist, so exportViewer/restoreLayer are untouched.
 
 ## Development workflow
 

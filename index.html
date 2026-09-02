@@ -296,6 +296,11 @@
   #gpsBtn:hover { background: var(--panel-2); border-color: var(--text-faint); }
   #gpsBtn:active { transform: scale(0.94); }
   #gpsBtn.active { background: var(--accent-soft); color: var(--accent-hover); border-color: var(--accent); }
+  /* "Siguiendo": el mapa se recentra en cada actualización de posición.
+     Se distingue con relleno sólido (vs. el tinte suave de solo "activo",
+     que significa "hay seguimiento GPS pero paneaste lejos — clic para
+     volver") para que el estado sea reconocible de un vistazo. */
+  #gpsBtn.following { background: var(--accent); color: #fff; border-color: var(--accent); box-shadow: var(--shadow-md), 0 0 0 3px var(--accent-soft); }
   #gpsBtn.locating { animation: gps-btn-pulse 1.2s ease-in-out infinite; }
   @keyframes gps-btn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
@@ -5064,16 +5069,21 @@ document.getElementById('compassBtn').addEventListener('click', () => {
 });
 
 // ---- GPS: seguimiento de ubicación en vivo ------------------------------
-// watchPosition() (no getCurrentPosition): el botón arma/desarma un
-// seguimiento continuo, igual que Medir/Elevación de arriba, así el punto
-// se sigue moviendo mientras el usuario se desplaza. El mapa solo se
-// recentra en el PRIMER fix (gpsFirstFix) — después el usuario puede
-// panear/zoomear libremente sin que cada actualización de posición lo
-// interrumpa; el botón sirve para volver a centrar (parar y arrancar de
-// nuevo) igual que el botón de ubicación de Google Maps.
+// watchPosition() (no getCurrentPosition): una vez activado, el punto se
+// sigue moviendo en el mapa mientras el usuario se desplaza. El botón tiene
+// 3 estados, igual que el control de ubicación de Google Maps:
+//   1. Apagado (sin clases): sin tracking. Clic → arranca y sigue.
+//   2. "following" (relleno sólido): tracking activo Y el mapa se recentra
+//      en cada fix nuevo. Clic → apaga todo (stopGps).
+//   3. "active" sin "following" (tinte suave): tracking activo pero el
+//      usuario paneó/zoomeó a mano (se detecta con el evento "dragstart"
+//      del mapa) y dejó de seguirlo — el punto se sigue actualizando en
+//      segundo plano, solo que sin mover la vista. Clic → vuelve a
+//      centrar y retoma el seguimiento (sin reiniciar el watch).
 let gpsWatchId = null;
 let gpsMarker = null;
 let gpsAccuracyCircle = null;
+let gpsFollowing = false;
 let gpsFirstFix = true;
 
 const gpsDotIcon = L.divIcon({
@@ -5111,10 +5121,11 @@ function onGpsUpdate(pos) {
   const btn = document.getElementById('gpsBtn');
   btn.classList.remove('locating');
 
-  if (gpsFirstFix) {
-    gpsFirstFix = false;
-    map.setView(latlng, Math.max(map.getZoom(), 16));
+  if (gpsFollowing) {
+    if (gpsFirstFix) map.setView(latlng, Math.max(map.getZoom(), 16));
+    else map.panTo(latlng, { animate: true });
   }
+  gpsFirstFix = false;
 }
 
 function onGpsError(err) {
@@ -5122,12 +5133,25 @@ function onGpsError(err) {
   stopGps();
 }
 
+function setGpsFollowing(following) {
+  gpsFollowing = following;
+  document.getElementById('gpsBtn').classList.toggle('following', following);
+}
+
 function startGps() {
   if (!navigator.geolocation) {
     toast('Tu navegador no soporta geolocalización.');
     return;
   }
+  // El navegador rechaza watchPosition() en contextos no seguros (fuera de
+  // https:// o http://localhost) — abrir el visor con doble clic (file://)
+  // cae en este caso. Se avisa de entrada porque si no, el error que llega
+  // después por onGpsError es más críptico para quien no sabe esto.
+  if (!window.isSecureContext) {
+    toast('La geolocalización requiere que el visor esté servido por https o http://localhost — no funciona abriendo el archivo directo (file://) en la mayoría de los navegadores.');
+  }
   gpsFirstFix = true;
+  setGpsFollowing(true);
   const btn = document.getElementById('gpsBtn');
   btn.classList.add('active', 'locating');
   gpsWatchId = navigator.geolocation.watchPosition(onGpsUpdate, onGpsError, {
@@ -5139,11 +5163,30 @@ function stopGps() {
   if (gpsWatchId !== null) { navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId = null; }
   if (gpsMarker) { map.removeLayer(gpsMarker); gpsMarker = null; }
   if (gpsAccuracyCircle) { map.removeLayer(gpsAccuracyCircle); gpsAccuracyCircle = null; }
+  setGpsFollowing(false);
   document.getElementById('gpsBtn').classList.remove('active', 'locating');
 }
 
 document.getElementById('gpsBtn').addEventListener('click', () => {
-  if (gpsWatchId !== null) stopGps(); else startGps();
+  if (gpsWatchId === null) {
+    startGps();
+  } else if (gpsFollowing) {
+    stopGps();
+  } else {
+    // Ya hay tracking corriendo, solo estaba "pausado" por un pan manual:
+    // no hace falta pedir permiso ni reiniciar watchPosition, alcanza con
+    // volver a centrar en la última posición conocida.
+    setGpsFollowing(true);
+    if (gpsMarker) map.setView(gpsMarker.getLatLng(), Math.max(map.getZoom(), 16));
+  }
+});
+
+// Un pan hecho a mano (arrastrar) es la señal de "dejé de seguir mi
+// ubicación" — un pan/zoom programático (el propio map.setView/panTo de
+// arriba, o cualquier otro del visor) no dispara "dragstart", así que esto
+// nunca se auto-desactiva por error.
+map.on('dragstart', () => {
+  if (gpsWatchId !== null && gpsFollowing) setGpsFollowing(false);
 });
 
 // ---- Elevación al hacer clic --------------------------------------------
