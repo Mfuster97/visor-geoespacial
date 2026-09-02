@@ -21,6 +21,8 @@ Visor geoespacial de escritorio/navegador para explorar y comparar proyectos sob
 - **Guardar y compartir**: exporta un nuevo archivo `.html` autocontenido con las capas actualmente cargadas ya embebidas (colores, tipo, visibilidad), listo para mandar a un cliente sin depender de ningún otro archivo.
 - **Capas WMS remotas**: agregá una capa de cualquier servicio WMS (OGC) por URL, con descubrimiento automático de capas disponibles vía GetCapabilities — ver detalle abajo.
 - **Capas WFS remotas**: descargá los elementos de un servicio WFS (OGC) y agregalos como una capa local más (buscable, con popup y en los gráficos), con el mismo descubrimiento por GetCapabilities — ver detalle abajo.
+- **Mi ubicación (GPS)**: botón flotante que sigue tu posición en vivo con un punto animado y círculo de precisión — ver detalle abajo.
+- **Uso offline**: una vez que abriste el visor con internet (servido por http/https), la app y las zonas del mapa que ya visitaste quedan disponibles sin conexión — ver detalle abajo.
 
 ## Tecnologías utilizadas
 
@@ -72,6 +74,26 @@ A diferencia de WMS (que trae una imagen), un servicio WFS entrega las geometrí
 
 > Igual que WMS, requiere que el servidor permita solicitudes desde el navegador (CORS).
 
+## Mi ubicación (GPS)
+
+El botón 📍 flotante (junto a la brújula) activa/desactiva el seguimiento en vivo de tu posición usando la geolocalización del navegador/dispositivo:
+
+- Al activarlo, el mapa se centra una vez sobre tu posición actual; a partir de ahí podés seguir navegando el mapa libremente sin que se recentre en cada actualización.
+- Tu posición se muestra como un punto azul animado, con un círculo alrededor que representa la precisión reportada (en metros).
+- Volvé a presionar el botón para dejar de seguir — se limpia el punto y el círculo del mapa.
+- Requiere que le des permiso de ubicación al sitio/navegador, y un **contexto seguro** (https, o `http://localhost`) — no funciona abriendo `index.html` directo con doble clic en algunos navegadores modernos.
+
+## Uso offline
+
+El visor incluye un archivo `sw.js` (Service Worker) que cachea automáticamente, a medida que los vas usando con internet:
+
+- La app misma (`index.html`) y las librerías (Leaflet, JSZip, shpjs, shp-write).
+- Los tiles del mapa base que ya se cargaron en pantalla.
+
+Con eso, volver a abrir el visor sin conexión funciona completo, y el mapa se ve nítido en las zonas y niveles de zoom que ya visitaste antes — **no** es una descarga de un área completa de antemano, es una caché de "lo que ya viste". Cargar un archivo local (KML/KMZ/SHP/GeoJSON) nunca necesitó internet y sigue funcionando igual sin conexión; agregar una capa WMS/WFS nueva sí necesita red siempre, porque son datos que el navegador nunca tuvo.
+
+> **Requiere que el visor esté servido por http o https** (por ejemplo `http://localhost:8000`, o publicado en un hosting) — los Service Worker no se activan al abrir `index.html` directo con `file://`. Abrir el archivo así sigue funcionando exactamente igual que siempre, simplemente sin esta caché offline. Un visor exportado con "Guardar y compartir" tampoco la tiene por defecto (viaja solo, sin `sw.js` al lado).
+
 ## Instalación y uso
 
 No requiere instalación. Es un único archivo HTML:
@@ -81,13 +103,14 @@ No requiere instalación. Es un único archivo HTML:
 3. Usá **"Agregar capa"** o arrastrá archivos directamente sobre el mapa para cargar tus KMZ/KML/Shapefile/GeoJSON.
 4. Cuando quieras conservar el estado actual, usá **"Guardar y compartir"** para exportar una copia con las capas ya adentro.
 
-> **Requiere conexión a internet** en tiempo de ejecución: las librerías (Leaflet, JSZip, shpjs) y los tiles satelitales se cargan desde CDN público. Sin internet, la página abre pero el mapa no tiene imagen de fondo y las librerías no funcionan.
+> **Requiere conexión a internet** la primera vez (o siempre que se abra por `file://`): las librerías (Leaflet, JSZip, shpjs) y los tiles satelitales se cargan desde CDN público. Si serviste el visor por http/https al menos una vez con internet, después funciona sin conexión gracias al Service Worker — ver "Uso offline" arriba.
 
 ## Estructura del proyecto
 
 ```
 _kmz_viewer/
 ├── index.html      # Aplicación completa (HTML + CSS + JS)
+├── sw.js           # Service Worker opcional, habilita el uso offline (ver arriba)
 ├── .gitignore
 └── README.md
 ```
@@ -102,6 +125,7 @@ Un visor exportado con "Guardar y compartir" es otro `index.html` autocontenido 
 - La detección de campos "Estado" y "Región" depende de que el KML/Shapefile los incluya con ese nombre de columna (u variantes contempladas); datos con otra nomenclatura no se clasifican automáticamente.
 - Geodatabase (`.gdb`) no es soportado por las razones técnicas explicadas arriba.
 - El archivo exportado por "Guardar y compartir" puede pesar varios MB si se embeben muchas capas (las geometrías se guardan como texto dentro del propio HTML).
+- El uso offline es una caché de lo ya visitado, no una descarga de área: una zona/zoom que nunca abriste con internet se ve sin tiles offline. Tampoco funciona si el visor se abrió por `file://` en vez de http/https.
 
 ## Seguridad
 

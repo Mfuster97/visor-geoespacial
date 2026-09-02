@@ -4,11 +4,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-Visor Geoespacial: a geospatial viewer for exploring/comparing project boundaries (originally electrical line projects vs. nearby SEA — Chilean environmental impact assessment — projects) on a satellite map. It is a **single self-contained static HTML file** (`index.html`, ~3000 lines: CSS + JS inline) with **no backend, no build system, no package manager, no bundler**. It's opened directly in a browser (double-click) or via any static file server.
+Visor Geoespacial: a geospatial viewer for exploring/comparing project boundaries (originally electrical line projects vs. nearby SEA — Chilean environmental impact assessment — projects) on a satellite map. It is a **single self-contained static HTML file** (`index.html`, ~4800 lines: CSS + JS inline) with **no backend, no build system, no package manager, no bundler**. It's opened directly in a browser (double-click) or via any static file server. There is one small optional companion file, `sw.js` (a Service Worker — see "Offline usage" below); the app itself still works fully without it, `index.html` just won't cache itself for offline use.
 
 Besides local vector formats, it can also add **remote WMS layers** (via URL + layer name, either typed manually or discovered via `GetCapabilities`) as an overlay alongside locally loaded files, and pull real geometries from a **remote WFS service** (`GetFeature`, downloaded as GeoJSON and merged into the same local-vector pipeline) — see `addWmsLayer`/WFS section in Architecture below.
 
 All third-party libraries (Leaflet, JSZip, shpjs, shp-write) are loaded from the `unpkg.com` CDN via `<script>` tags at the top of `index.html` — there is nothing to `npm install`.
+
+### Offline usage
+
+`sw.js` is a Service Worker with a "network-first, cache as fallback" strategy applied to every GET request the page makes — `index.html` itself, the CDN libraries, and every map tile. Nothing is pre-downloaded: a resource is cached the first time it's successfully fetched, and served from that cache on the next request whenever the network fetch fails. In practice this means the app shell always works offline after one successful load, and the map looks fully detailed only in areas/zooms already visited — it is *not* a "download this region" feature. Loading a local file (KML/KMZ/SHP/GeoJSON) never needed the network and is unaffected; adding a WMS/WFS layer always needs the network, cached or not, since that's new data the browser never had.
+
+Registration (`index.html`, guarded by `'serviceWorker' in navigator && window.isSecureContext`) happens on `window.load` and fails silently if unsupported. Two hard constraints worth knowing when touching this:
+- **Service Workers require a secure context** — `https://`, or `http://localhost`/`127.0.0.1`. Opening `index.html` directly via `file://` (the primary documented way to use this app) never registers one; the app still works the same as always, just without offline caching, and nothing in the console should error over this.
+- **A file exported via "Guardar y compartir" won't have `sw.js` next to it** wherever the recipient saves/opens it (it's meant to be a standalone file) — registration there fails silently (404) the same way. Offline caching is a main-repo-served feature, not something exported copies carry with them.
+
+`document.body` gets an `is-offline` class (toggled by the `online`/`offline` window events, driving `#offlineBadge` in the header) purely as a UI signal — it's informational, not what makes caching work.
+
+### GPS
+
+`gpsBtn` (floating, next to the compass) toggles `navigator.geolocation.watchPosition` live tracking, same on/off button pattern as Medir/Elevación. A pulsing "blue dot" (`L.marker` with a `gps-dot-icon` divIcon) plus an `L.circle` sized to the reported accuracy track the position; the map only auto-centers on the *first* fix after pressing the button (`gpsFirstFix`), so panning around afterward doesn't get fought by every subsequent update. Pressing the button again calls `stopGps()`, which clears the watch and removes both layers — there's nothing to persist, so exportViewer/restoreLayer are untouched.
 
 ## Development workflow
 
@@ -46,6 +60,7 @@ Everything lives in `index.html`, structured top to bottom as:
    - UI rendering: `renderLayersPanel`, `renderTree`, `renderStats`, `focusItem`, search (`renderSearchResults`, `runPlaceSearch`).
    - Grid overlays (`drawLatLngGrid`, `drawUtmGrid`) and coordinate conversion (`latLngToUtm`/`utmToLatLng`, `parseUtmPair`, `parseCoordinatePair`).
    - **Export ("Guardar y compartir")**: `exportViewer` clones `ORIGINAL_HTML` (a snapshot of the page's *original* `outerHTML` taken before any DOM mutations, captured at the very top of the script) and re-embeds the currently loaded layers' data plus their current color/visibility/type state, producing a new fully self-contained `index.html`-like file with no external file dependencies beyond the same CDN scripts.
+   - **Preconfigured service catalog** (`#catalogModal`, "🌐 Catálogo de servicios"): `SERVICE_CATALOG` is a hand-maintained array of known WMS/WFS services (name, organization, category, type, URL, description) — adding a service is just appending an entry, no logic changes needed. `renderCatalogList` filters it by free-text search, type (WMS/WFS), a curated category taxonomy (`CATALOG_CATEGORY_CHIPS`), and by organism (`renderCatalogOrganismChips`, options derived live from `SERVICE_CATALOG` so they never go stale as entries are added), then sorts with `catalogSortComparator` (favorites first, then recently-used by recency, relying on `Array.sort` stability for the rest). Picking "Usar servicio" opens the normal WMS or WFS modal with the URL prefilled and auto-runs "Buscar capas" — it's a picker over the existing GetCapabilities flow, not a separate code path.
    - Event wiring for all toolbar/modal/file-input/drag-drop interactions, near the bottom of the script.
 
 ### Key data model
@@ -64,6 +79,7 @@ Directions being considered for future work (not yet implemented unless noted el
 
 - WMS: manual layer entry and `GetCapabilities`-based discovery (with filtering and auto-`fitBounds`) are both implemented — see Architecture.
 - WFS: `GetCapabilities` discovery and `GetFeature` download (bbox + feature-count + fetch-timeout limited, merged into the local vector pipeline) are both implemented — see Architecture.
+- Offline usage (opportunistic app-shell + tile caching via `sw.js`) and live GPS tracking are both implemented — see "Offline usage" / "GPS" above.
 - Sentinel/Landsat imagery integration
 - Python/FastAPI backend (optional, for features that outgrow a client-only architecture)
 - PostgreSQL/PostGIS (optional, for server-side spatial storage/queries)

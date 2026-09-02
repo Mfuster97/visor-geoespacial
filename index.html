@@ -273,6 +273,79 @@
   #compassBtn:hover { background: var(--panel-2); border-color: var(--text-faint); }
   #compassBtn:active { transform: scale(0.94); }
 
+  #gpsBtn {
+    position: absolute;
+    bottom: 70px;
+    left: 12px;
+    z-index: 1000;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: var(--shadow-md);
+    transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease, color 0.12s ease;
+  }
+  #gpsBtn:hover { background: var(--panel-2); border-color: var(--text-faint); }
+  #gpsBtn:active { transform: scale(0.94); }
+  #gpsBtn.active { background: var(--accent-soft); color: var(--accent-hover); border-color: var(--accent); }
+  #gpsBtn.locating { animation: gps-btn-pulse 1.2s ease-in-out infinite; }
+  @keyframes gps-btn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  /* Punto de ubicación GPS en el mapa: círculo con anillo animado, estilo
+     "blue dot" estándar de apps de mapas. gps-accuracy-circle es un
+     L.circle normal (radio real en metros = precisión reportada por el
+     navegador); estas clases solo visten el ícono del L.marker central. */
+  .gps-dot-icon { background: transparent; border: none; }
+  .gps-dot-wrap { position: relative; width: 18px; height: 18px; }
+  .gps-dot {
+    position: absolute; inset: 4px;
+    background: var(--accent);
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  }
+  .gps-dot-pulse {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    opacity: 0.5;
+    animation: gps-dot-pulse 1.8s ease-out infinite;
+  }
+  @keyframes gps-dot-pulse {
+    0% { transform: scale(0.5); opacity: 0.6; }
+    100% { transform: scale(2.2); opacity: 0; }
+  }
+
+  /* Indicador de conectividad: oculto por default, aparece en el header
+     cuando el navegador detecta que no hay conexión (evento "offline").
+     No implica que TODO funcione sin internet — solo que las zonas del
+     mapa ya visitadas y la app misma quedan disponibles gracias al
+     Service Worker (ver sw.js); una capa WMS/WFS remota igual necesita
+     red. El título del badge aclara esto. */
+  #offlineBadge {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--warning);
+    background: rgba(255, 210, 74, 0.12);
+    border: 1px solid rgba(255, 210, 74, 0.35);
+    border-radius: 999px;
+    padding: 4px 10px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  body.is-offline #offlineBadge { display: inline-flex; }
+
   #basemapControl {
     position: absolute;
     top: 14px;
@@ -1070,6 +1143,7 @@
     <h1>🗺️ Visor Geoespacial</h1>
   </div>
   <span class="filename" id="filename">Ningún archivo cargado</span>
+  <span id="offlineBadge" title="Sin conexión: el visor y las zonas del mapa que ya visitaste siguen disponibles (guardados en caché), pero cargar capas nuevas o remotas (WMS/WFS) necesita internet.">📴 Sin conexión</span>
   <div class="toolbar-spacer"></div>
 
   <div class="toolbar-group">
@@ -1300,6 +1374,7 @@
       </select>
     </div>
     <button id="compassBtn" title="Norte arriba — clic para volver a la vista inicial">🧭</button>
+    <button id="gpsBtn" title="Seguir mi ubicación (GPS)">📍</button>
     <div id="measurePanel"></div>
     <div id="empty">
       <div class="big">Arrastra uno o varios archivos aquí</div>
@@ -1908,6 +1983,34 @@ function toast(msg) {
 function showLoading(v) {
   document.getElementById('loading').style.display = v ? 'block' : 'none';
 }
+
+// ---- Uso offline ----------------------------------------------------------
+// Cache "oportunista": sw.js no descarga nada por adelantado, solo cachea
+// (con network-first) todo lo que el visor ya pidió alguna vez — el HTML/JS
+// de la app, las librerías del CDN y los tiles del mapa. Volver a abrir el
+// visor sin conexión funciona completo; el mapa se ve nítido solo en las
+// zonas/zooms que ya se visitaron con internet. Cargar una capa nueva o una
+// capa WMS/WFS remota sigue necesitando red, offline o no.
+//
+// Requiere un origen seguro (http/https, o localhost) — los Service Worker
+// no corren si el archivo se abrió directo por file://, y ahí esta sección
+// simplemente no hace nada (el visor sigue funcionando 100% online igual
+// que siempre, nunca se bloquea por esto). Un visor exportado con "Guardar
+// y compartir" intenta registrar el mismo sw.js relativo a donde se abra:
+// si no hay un sw.js al lado (el caso más común, por ej. un archivo suelto
+// enviado por chat), el registro falla en silencio y no pasa nada más.
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* sin sw.js al lado, o falló: se ignora */ });
+  });
+}
+
+function updateOfflineBadge() {
+  document.body.classList.toggle('is-offline', !navigator.onLine);
+}
+updateOfflineBadge();
+window.addEventListener('online', () => { updateOfflineBadge(); toast('Conexión recuperada'); });
+window.addEventListener('offline', () => { updateOfflineBadge(); toast('Sin conexión — usando el visor y los tiles ya guardados en caché'); });
 
 function colorForFolder(name) {
   let hash = 0;
@@ -4919,6 +5022,89 @@ document.getElementById('gridSelect').addEventListener('change', (e) => {
 const DEFAULT_VIEW = { center: [-27.5, -70.0], zoom: 6 };
 document.getElementById('compassBtn').addEventListener('click', () => {
   map.setView(DEFAULT_VIEW.center, DEFAULT_VIEW.zoom);
+});
+
+// ---- GPS: seguimiento de ubicación en vivo ------------------------------
+// watchPosition() (no getCurrentPosition): el botón arma/desarma un
+// seguimiento continuo, igual que Medir/Elevación de arriba, así el punto
+// se sigue moviendo mientras el usuario se desplaza. El mapa solo se
+// recentra en el PRIMER fix (gpsFirstFix) — después el usuario puede
+// panear/zoomear libremente sin que cada actualización de posición lo
+// interrumpa; el botón sirve para volver a centrar (parar y arrancar de
+// nuevo) igual que el botón de ubicación de Google Maps.
+let gpsWatchId = null;
+let gpsMarker = null;
+let gpsAccuracyCircle = null;
+let gpsFirstFix = true;
+
+const gpsDotIcon = L.divIcon({
+  className: 'gps-dot-icon',
+  html: '<div class="gps-dot-wrap"><div class="gps-dot-pulse"></div><div class="gps-dot"></div></div>',
+  iconSize: [18, 18],
+  iconAnchor: [9, 9]
+});
+
+function gpsErrorMessage(err) {
+  if (err.code === err.PERMISSION_DENIED) return 'Permiso de ubicación denegado — habilitalo en la configuración del navegador/sitio.';
+  if (err.code === err.POSITION_UNAVAILABLE) return 'No se pudo determinar tu ubicación (sin señal GPS/red).';
+  if (err.code === err.TIMEOUT) return 'Se agotó el tiempo esperando la ubicación — probá de nuevo.';
+  return 'No se pudo obtener tu ubicación.';
+}
+
+function onGpsUpdate(pos) {
+  const latlng = [pos.coords.latitude, pos.coords.longitude];
+  const accuracy = pos.coords.accuracy || 0;
+
+  if (!gpsMarker) {
+    gpsMarker = L.marker(latlng, { icon: gpsDotIcon, interactive: false, zIndexOffset: 1000 }).addTo(map);
+  } else {
+    gpsMarker.setLatLng(latlng);
+  }
+  if (!gpsAccuracyCircle) {
+    gpsAccuracyCircle = L.circle(latlng, {
+      radius: accuracy, color: '#4f8cff', weight: 1, fillColor: '#4f8cff', fillOpacity: 0.12, interactive: false
+    }).addTo(map);
+  } else {
+    gpsAccuracyCircle.setLatLng(latlng);
+    gpsAccuracyCircle.setRadius(accuracy);
+  }
+
+  const btn = document.getElementById('gpsBtn');
+  btn.classList.remove('locating');
+
+  if (gpsFirstFix) {
+    gpsFirstFix = false;
+    map.setView(latlng, Math.max(map.getZoom(), 16));
+  }
+}
+
+function onGpsError(err) {
+  toast(gpsErrorMessage(err));
+  stopGps();
+}
+
+function startGps() {
+  if (!navigator.geolocation) {
+    toast('Tu navegador no soporta geolocalización.');
+    return;
+  }
+  gpsFirstFix = true;
+  const btn = document.getElementById('gpsBtn');
+  btn.classList.add('active', 'locating');
+  gpsWatchId = navigator.geolocation.watchPosition(onGpsUpdate, onGpsError, {
+    enableHighAccuracy: true, maximumAge: 5000, timeout: 15000
+  });
+}
+
+function stopGps() {
+  if (gpsWatchId !== null) { navigator.geolocation.clearWatch(gpsWatchId); gpsWatchId = null; }
+  if (gpsMarker) { map.removeLayer(gpsMarker); gpsMarker = null; }
+  if (gpsAccuracyCircle) { map.removeLayer(gpsAccuracyCircle); gpsAccuracyCircle = null; }
+  document.getElementById('gpsBtn').classList.remove('active', 'locating');
+}
+
+document.getElementById('gpsBtn').addEventListener('click', () => {
+  if (gpsWatchId !== null) stopGps(); else startGps();
 });
 
 // ---- Elevación al hacer clic --------------------------------------------
