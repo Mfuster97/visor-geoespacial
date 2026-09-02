@@ -4788,14 +4788,30 @@ function buildLayerRow(file, isFirst, isLast) {
   }
   const fileItems = allItems.filter(i => i.fileId === file.id);
   const hasEstado = fileItems.some(i => i.estado);
-  // La simbología personalizada (file.style) pisa tanto el color plano como
-  // el gradiente por estado — es una elección explícita del usuario.
+  // Un KML/KMZ con colores propios (ver parseKml) puede traer varios
+  // colores distintos entre sus placemarks aunque el archivo entero use un
+  // único file.color de respaldo — mostrar ese único color en el swatch
+  // sería engañoso ("parece que unificó todo") cuando en el mapa sí se ve
+  // la variedad real. Si hay más de un color entre los items, se arma un
+  // mini gradiente cónico con hasta 8 de esos colores (representativo, no
+  // proporcional) en vez de un color plano.
+  const distinctColors = hasEstado ? [] : Array.from(new Set(fileItems.map(i => i.color).filter(Boolean))).slice(0, 8);
+  // La simbología personalizada (file.style) pisa cualquier otro criterio
+  // — es una elección explícita del usuario.
   const swatchStyle = file.style
     ? `background:${file.style.fillColor};`
     : hasEstado
       ? `background:conic-gradient(${STATUS_BUCKETS.map((b, idx) => `${b.color} ${idx * 90}deg ${(idx + 1) * 90}deg`).join(',')});`
-      : `background:${file.color};`;
-  const swatchTitle = file.style ? 'Color de capa (personalizado)' : (hasEstado ? 'Colores por estado del proyecto' : 'Color de capa');
+      : distinctColors.length > 1
+        ? `background:conic-gradient(${distinctColors.map((c, idx) => `${c} ${idx * 360 / distinctColors.length}deg ${(idx + 1) * 360 / distinctColors.length}deg`).join(',')});`
+        : `background:${file.color};`;
+  const swatchTitle = file.style
+    ? 'Color de capa (personalizado)'
+    : hasEstado
+      ? 'Colores por estado del proyecto'
+      : distinctColors.length > 1
+        ? 'Colores propios del archivo de origen (varios)'
+        : 'Color de capa';
   return `
     <div class="layer-row${selectedCls}" data-file-id="${file.id}">
       <div class="lrow-top">
