@@ -2063,6 +2063,30 @@ function getStyleForPlacemark(pm, styleMap) {
   return style;
 }
 
+// Muchos puntos de KML no tienen <IconStyle><color> — el color "se ve" solo
+// porque el usuario eligió un ícono de color en Google Earth/Google My Maps
+// al armar el archivo, no porque haya un <color> numérico. Sin esto, esos
+// puntos caían siempre al color autoasignado/por-Estado, aunque el KML sí
+// tenía un color de origen (elegido a través del ícono, no del tag <color>).
+function inferColorFromIconHref(href) {
+  if (!href) return null;
+  // Google My Maps: "http://.../icon-1899-0288D1-normal.png" — el segundo
+  // bloque es el color hex exacto elegido en su interfaz.
+  const hexMatch = href.match(/-([0-9a-fA-F]{6})-/);
+  if (hexMatch) return `#${hexMatch[1]}`;
+  // Paleta estándar de pines/paddles de Google Earth (mapfiles/kml/pushpin
+  // y mapfiles/kml/paddle) — se identifican por el nombre de archivo.
+  const NAMED_COLORS = [
+    [/wht|white/i, '#ffffff'], [/ylw|yellow/i, '#ffd700'], [/red/i, '#ea4335'],
+    [/grn|green/i, '#34a853'], [/ltblu|lightblue/i, '#4fc3f7'], [/blu|blue/i, '#4285f4'],
+    [/pink/i, '#ff69b4'], [/purple/i, '#9c27b0'], [/orange/i, '#ff9800']
+  ];
+  for (const [re, hex] of NAMED_COLORS) {
+    if (re.test(href)) return hex;
+  }
+  return null;
+}
+
 function parseStyleEl(styleEl) {
   const result = {};
   const lineStyle = styleEl.querySelector('LineStyle');
@@ -2083,6 +2107,10 @@ function parseStyleEl(styleEl) {
     if (c) result.iconColor = parseKmlColor(c.textContent.trim());
     const href = iconStyle.querySelector('Icon > href');
     if (href) result.iconHref = href.textContent.trim();
+    if (!result.iconColor && result.iconHref) {
+      const inferred = inferColorFromIconHref(result.iconHref);
+      if (inferred) result.iconColor = { hex: inferred, alpha: 1 };
+    }
   }
   return result;
 }
@@ -2158,14 +2186,18 @@ function parseKml(kmlText, fileId, fileColor) {
     const region = extractRegion(desc);
     const isDuctos = /l[ií]neas?\s*o?\s*ductos/i.test(folder);
     const estadoColor = estado ? classifyEstado(estado).color : null;
-    // Prioridad de color: 1) coloreado inteligente por Estado (capas SEA,
-    // para poder comparar proyectos de un vistazo) 2) el color propio del
-    // KMZ/KML de origen (su Style/StyleMap) — así se respeta lo que el
-    // usuario armó en Google Earth/QGIS/etc. 3) heurística de líneas/ductos
-    // 4) color autoasignado a la capa: solo se llega acá si el KML no
-    // definió ningún estilo para esta Placemark.
-    const color = estadoColor || style.color || style.iconColor || (isDuctos ? '#ffe600' : null) || fileColor;
-    const polyFillColor = estadoColor || style.fillColor || (isDuctos ? '#ffe600' : null) || color;
+    // Prioridad de color: 1) color propio del KMZ/KML de origen (su
+    // Style/StyleMap) — SIEMPRE se respeta si existe, es lo que pide esta
+    // función. 2) coloreado inteligente por Estado, pero solo como
+    // fallback para placemarks que no traen su propio estilo — el campo
+    // "Estado" aparece en muchos KML que no son de SEA (no solo en el uso
+    // original de comparar proyectos SEA), así que no puede pisar un color
+    // que el usuario sí definió a mano en Google Earth/QGIS/etc.
+    // 3) heurística de líneas/ductos. 4) color autoasignado a la capa: solo
+    // se llega acá si el KML no definió ningún estilo para esta Placemark.
+    const nativeColor = style.color || style.iconColor || null;
+    const color = nativeColor || estadoColor || (isDuctos ? '#ffe600' : null) || fileColor;
+    const polyFillColor = style.fillColor || estadoColor || (isDuctos ? '#ffe600' : null) || color;
     const polyFillOpacity = style.fillOpacity !== undefined ? style.fillOpacity : fillOpacity;
 
     let layer = null;
