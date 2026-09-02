@@ -2035,9 +2035,14 @@ function parseKmlColor(kmlColor) {
   return { hex: `#${rr}${gg}${bb}`, alpha };
 }
 
+// Sin colores por defecto acá (a diferencia de antes): si el KML no definió
+// Style/StyleMap para esta Placemark, color/fillColor quedan undefined — así
+// parseKml puede distinguir "el KML no dijo nada" (aplica su propio
+// fallback: color por Estado, o el color autoasignado a la capa) de "el KML
+// pidió este color puntual", que es el que hay que respetar.
 function getStyleForPlacemark(pm, styleMap) {
   let styleUrl = pm.querySelector('styleUrl');
-  let style = { color: '#4f8cff', fillColor: '#4f8cff', fillOpacity: 0.3, weight: 3 };
+  let style = { weight: 3 };
   let inlineStyle = pm.querySelector('Style');
   let resolved = null;
 
@@ -2050,7 +2055,7 @@ function getStyleForPlacemark(pm, styleMap) {
   }
   if (resolved) {
     if (resolved.lineColor) style.color = resolved.lineColor.hex;
-    if (resolved.polyColor) { style.fillColor = resolved.polyColor.hex; style.fillOpacity = resolved.polyColor.alpha * 0.5; }
+    if (resolved.polyColor) { style.fillColor = resolved.polyColor.hex; style.fillOpacity = resolved.polyColor.alpha; }
     if (resolved.lineWidth) style.weight = resolved.lineWidth;
     if (resolved.iconColor) style.iconColor = resolved.iconColor.hex;
     if (resolved.iconHref) style.iconHref = resolved.iconHref;
@@ -2151,8 +2156,17 @@ function parseKml(kmlText, fileId, fileColor) {
     const style = getStyleForPlacemark(pm, styleMap);
     const estado = extractEstado(desc);
     const region = extractRegion(desc);
-    let color = estado ? classifyEstado(estado).color : fileColor;
-    if (/l[ií]neas?\s*o?\s*ductos/i.test(folder)) color = '#ffe600';
+    const isDuctos = /l[ií]neas?\s*o?\s*ductos/i.test(folder);
+    const estadoColor = estado ? classifyEstado(estado).color : null;
+    // Prioridad de color: 1) coloreado inteligente por Estado (capas SEA,
+    // para poder comparar proyectos de un vistazo) 2) el color propio del
+    // KMZ/KML de origen (su Style/StyleMap) — así se respeta lo que el
+    // usuario armó en Google Earth/QGIS/etc. 3) heurística de líneas/ductos
+    // 4) color autoasignado a la capa: solo se llega acá si el KML no
+    // definió ningún estilo para esta Placemark.
+    const color = estadoColor || style.color || style.iconColor || (isDuctos ? '#ffe600' : null) || fileColor;
+    const polyFillColor = estadoColor || style.fillColor || (isDuctos ? '#ffe600' : null) || color;
+    const polyFillOpacity = style.fillOpacity !== undefined ? style.fillOpacity : fillOpacity;
 
     let layer = null;
     let type = null;
@@ -2189,8 +2203,8 @@ function parseKml(kmlText, fileId, fileColor) {
         if (coords.length) {
           layer = L.polygon(coords, {
             color: color,
-            fillColor: color,
-            fillOpacity: fillOpacity,
+            fillColor: polyFillColor,
+            fillOpacity: polyFillOpacity,
             weight: style.weight
           });
           type = 'polygon';
@@ -2209,7 +2223,7 @@ function parseKml(kmlText, fileId, fileColor) {
       });
       multiGeom.querySelectorAll('Polygon outerBoundaryIs coordinates').forEach(c => {
         const co = coordsFromText(c.textContent);
-        if (co.length) { subLayers.push(L.polygon(co, { color: color, fillColor: color, fillOpacity: fillOpacity })); pushAll(bounds, co); }
+        if (co.length) { subLayers.push(L.polygon(co, { color: color, fillColor: polyFillColor, fillOpacity: polyFillOpacity })); pushAll(bounds, co); }
       });
       if (subLayers.length) {
         layer = L.layerGroup(subLayers);
